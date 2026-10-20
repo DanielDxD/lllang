@@ -2475,7 +2475,8 @@ fn parse_string_parts(raw: &str) -> Vec<StringPart> {
                     }
                     inner.push(ch);
                 }
-                parts.push(StringPart::Text(format!("\\({inner})")));
+                let expr = parse_interpolation_expr(&inner);
+                parts.push(StringPart::Interpolation(Box::new(expr)));
             } else if let Some(next) = chars.next() {
                 text.push(match next {
                     'n' => '\n',
@@ -2494,4 +2495,16 @@ fn parse_string_parts(raw: &str) -> Vec<StringPart> {
         parts.push(StringPart::Text(text));
     }
     parts
+}
+
+fn parse_interpolation_expr(inner: &str) -> Expr {
+    let (tokens, lex_diags) = lex(inner);
+    let source_len = inner.len() as u32;
+    let mut parser = Parser {
+        tokens,
+        pos: 0,
+        diagnostics: lex_diags,
+        source_len,
+    };
+    parser.parse_expr()
 }

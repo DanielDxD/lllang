@@ -15,20 +15,20 @@ The **`lang`** binary is the unified entry point for project scaffolding, builds
 | `--solution PATH` | Use `Solution.ll` for monorepo commands |
 | `--offline` | Refuse network for package commands |
 
-**Phase 1 implemented:** `--version`, `--info` (minimal), global help.
+**Phase 2 implemented:** `--version`, `--info`, `check` (sema), `build`, `run`, `lsp` (syntax + sema diagnostics).
 
 ## Command overview
 
 | Command | Status | Summary |
 |---------|--------|---------|
 | `new` | Planned | Scaffold from template (including `solution`) |
-| `build` | Planned | Compile package or solution members |
+| `build` | **Phase 2** | Compile package or solution members |
 | `solution` | Planned | Add/list/remove solution members |
-| `run` | Planned | Build (if needed) and run executable |
+| `run` | **Phase 2** | Build (if needed) and run executable |
 | `watch` | Planned | Rebuild/rerun on file changes |
 | `test` | Planned | Run unit/integration tests |
 | `bench` | Planned | Run benchmarks |
-| `check` | **Phase 1** | Parse `.ll`; syntax diagnostics |
+| `check` | **Phase 2** | Parse + sema diagnostics (LL1xxx / LL2xxx) |
 | `fmt` | Planned | Format source |
 | `doc` | Planned | Generate documentation |
 | `clean` | Planned | Remove `.lang/` artifacts |
@@ -137,13 +137,13 @@ Runs `benches/` and prints statistical summary.
 
 ## `lang check`
 
-**Phase 1 — available.**
+**Phase 2 — available.**
 
 ```bash
 lang check [PATH...]
 ```
 
-Recursively parse `.ll` files. Does not typecheck. Exit code 0 iff no parse errors.
+Recursively parse `.ll` files and run semantic analysis. Exit code 0 iff no errors.
 
 ```bash
 lang check .
@@ -323,8 +323,9 @@ No flags in Phase 1; configuration via editor client.
 
 | Phase | Commands |
 |-------|----------|
-| **1 (current)** | `lsp`, `check`, `--version`, `--info` |
-| **2** | `build`, `run`, `fmt`, expanded `lsp` |
+| **1** | `lsp` (syntax), `check` (parse), `--version`, `--info` |
+| **2 (current)** | `check` (sema), `build`, `run`, `lsp` (sema diags) |
+| **2.1** | `fmt`, go-to-def / rename in LSP |
 | **3** | `add`, `restore`, `pack`, `publish`, `search`, full package graph |
 | **4** | `watch`, `bench`, `doc`, `llm`, `sdk` polish |
 

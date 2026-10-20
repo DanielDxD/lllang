@@ -1,19 +1,31 @@
 # Installation
 
-LLLang ships as a single **`lang`** CLI binary plus optional editor extensions. Phase 1 focuses on syntax checking and the language server; full compilation and package publishing arrive in later phases (see [ROADMAP](../../ROADMAP.md)).
+LLLang ships as a single **`lang`** CLI binary plus optional editor extensions. Phase 2 adds semantic checking and native `build`/`run` via LLVM 22 (see [ROADMAP](../../ROADMAP.md)).
 
 ## Requirements
 
-| Component | Phase 1 | Full toolchain (Phase 2+) |
-|-----------|---------|---------------------------|
-| OS | macOS, Linux, Windows | Same |
-| CPU | x64 or arm64 | Same |
-| Rust | 1.85+ (to build from source) | Same |
-| LLVM | — | LLVM 22 (bundled with releases) |
+| Component | Notes |
+|-----------|-------|
+| OS | macOS, Linux, Windows |
+| CPU | x64 or arm64 |
+| Rust | 1.85+ (to build from source) |
+| LLVM | **LLVM 22** required to compile `lllang-llvm` / run `lang build` |
 
 You do **not** need Node.js, a JVM, or a separate package runtime. Dependencies are prebuilt `.bll` libraries resolved into `~/.lang/store` (see [Package manager](../packages/package-manager.md)).
 
-## Install from source (recommended in Phase 1)
+### LLVM 22 (macOS Homebrew)
+
+```bash
+brew install llvm@22
+export LLVM_SYS_221_PREFIX=/opt/homebrew/opt/llvm@22
+export PATH="/opt/homebrew/opt/llvm@22/bin:$PATH"
+# Optional but recommended when linking with Apple clang:
+export SDKROOT="$(xcrun --show-sdk-path)"
+```
+
+If `LLVM_SYS_221_PREFIX` is unset, `lllang-llvm`'s `build.rs` fails with a clear message. Integration tests that need codegen skip automatically when LLVM is missing.
+
+## Install from source
 
 Clone the repository and build the workspace:
 
@@ -21,6 +33,7 @@ Clone the repository and build the workspace:
 git clone https://github.com/lllang-lang/llang.git
 cd llang
 rustup toolchain install stable
+export LLVM_SYS_221_PREFIX=/opt/homebrew/opt/llvm@22   # see above
 cargo build -p lang --release
 ```
 
@@ -38,14 +51,16 @@ lang --version
 lang --info
 ```
 
-Expected Phase 1 commands that work today:
+Commands that work in Phase 2:
 
 ```bash
-lang check path/to/project
-lang lsp          # stdio JSON-RPC; used by editors
+lang check path/to/file.ll
+lang build --manifest examples/hello/Package.ll
+lang run --manifest examples/hello/Package.ll
+lang lsp          # stdio JSON-RPC; syntax + sema diagnostics
 ```
 
-Other subcommands (`build`, `run`, `add`, …) may print “not yet implemented” until Phase 2–3.
+`lang fmt` and package-registry commands (`add`, `publish`, …) remain stubs until Phase 2.1 / 3.
 
 ## Prebuilt releases (planned)
 

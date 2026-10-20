@@ -1,6 +1,6 @@
 # Hello, world
 
-This walkthrough creates a minimal console application, explains what Phase 1 can do today, and shows how the same project will build and run once codegen lands.
+This walkthrough creates a minimal console application and runs it with the Phase 2 toolchain (`lang check` / `lang build` / `lang run`).
 
 ## Create a project
 
@@ -37,26 +37,31 @@ hello/
     hello_test.ll    # optional; lang test
 ```
 
-## Phase 1: syntax check
-
-With Phase 1 tooling, compile and run are not available yet. Validate syntax:
+## Check
 
 ```bash
 lang check .
 lang check src/main.ll
 ```
 
-`check` walks all `.ll` files under the path, parses them, and prints diagnostics with file, line, and column. Exit code is non-zero if any file fails to parse.
+`check` parses and runs semantic analysis (LL1xxx / LL2xxx). Exit code is non-zero on errors.
 
-## Phase 2+: build and run
+## Build and run
 
-When the LLVM backend is enabled:
+Requires LLVM 22 (`LLVM_SYS_221_PREFIX`). From a package directory or via `--manifest`:
 
 ```bash
-lang build              # debug, native target
-lang build --release
-lang run                  # build if needed, then execute
-lang run -- arg1 arg2
+lang build --manifest Package.ll
+lang build --manifest Package.ll --release
+lang run --manifest Package.ll
+lang run --manifest Package.ll -- -- arg1 arg2
+```
+
+Copy `examples/hello` for a known-good layout:
+
+```bash
+lang run --manifest examples/hello/Package.ll
+# → Hello, LLLang!
 ```
 
 `lang run` respects build settings from `Package.ll` (`settings:`, product name, `--release`).

@@ -31,11 +31,22 @@ impl AnalyzedDocument {
     }
 
     pub fn lsp_diagnostics(&self) -> Vec<LspDiagnostic> {
-        self.parsed
+        let mut out: Vec<LspDiagnostic> = self
+            .parsed
             .diagnostics
             .iter()
             .map(|d| diagnostic_to_lsp(d, &self.map))
-            .collect()
+            .collect();
+        // Phase 2: also run sema (skip manifests).
+        let path = self.uri.path().to_string();
+        let name = path.rsplit('/').next().unwrap_or("");
+        if name != "Package.ll" && name != "Solution.ll" {
+            let sema = lllang_sema::analyze(&[(path, self.source.clone())]);
+            for d in &sema.diagnostics {
+                out.push(diagnostic_to_lsp(d, &self.map));
+            }
+        }
+        out
     }
 
     pub fn document_symbols(&self) -> Vec<DocumentSymbol> {

@@ -11,6 +11,8 @@ pub const KNOWN_IMPORTS: &[&str] = &[
 ];
 
 pub fn is_known_import(path: &str) -> bool {
+    // Std.* is always known; other paths may still resolve when their sources
+    // are part of the same analysis unit (path deps / solutions).
     KNOWN_IMPORTS.contains(&path)
 }
 
@@ -39,12 +41,17 @@ pub fn builtin_type_methods() -> IndexMap<(String, String), (Vec<Ty>, Ty, Option
 }
 
 /// Instance members/properties by type name.
+/// Value: (result_ty, is_property, builtin_id)
 pub fn builtin_members() -> IndexMap<(String, String), (Ty, bool, &'static str)> {
     let mut m = IndexMap::new();
     // (type, member) -> (ty, is_property, builtin_id)
     m.insert(
         ("String".into(), "isEmpty".into()),
         (Ty::Bool, true, "string_is_empty"),
+    );
+    m.insert(
+        ("Double".into(), "squareRoot".into()),
+        (Ty::Double, false, "double_sqrt"),
     );
     m
 }

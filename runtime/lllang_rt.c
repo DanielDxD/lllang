@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,6 +70,11 @@ void *ll_alloc(const LlTypeDesc *type) {
     ll_trap("memory", "ll_alloc: null type");
   }
   return ll_alloc_bytes(type, type->size);
+}
+
+void *ll_alloc_sized(size_t payload_bytes) {
+  static const LlTypeDesc generic = { .name = "object", .deinit = NULL, .size = 0 };
+  return ll_alloc_bytes(&generic, payload_bytes);
 }
 
 void *ll_retain(void *obj) {
@@ -307,6 +313,10 @@ int64_t ll_int_from_string(void *str, int *ok_out) {
     *ok_out = 1;
   }
   return (int64_t)v;
+}
+
+double ll_double_sqrt(double x) {
+  return sqrt(x);
 }
 
 int main(int argc, char **argv) {

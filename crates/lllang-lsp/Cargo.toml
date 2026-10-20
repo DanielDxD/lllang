@@ -9,6 +9,7 @@ description = "Language Server Protocol implementation for LLLang"
 
 [dependencies]
 lllang-syntax.workspace = true
+lllang-sema.workspace = true
 tower-lsp.workspace = true
 tokio.workspace = true
 serde.workspace = true

@@ -1,6 +1,6 @@
 # Roadmap
 
-## Phase 1 — Spec, docs, syntax, LSP shell (current)
+## Phase 1 — Spec, docs, syntax, LSP shell
 
 - [x] Language specification and design docs (English)
 - [x] File formats: `.ll`, `.bll`, `.sbl`, `.mll`
@@ -10,13 +10,19 @@
 - [x] `lllang-syntax` lexer/parser + diagnostics
 - [x] Minimal LSP (`lang lsp`) + VS Code / web highlighting
 
-## Phase 2 — Semantic analysis & LLVM
+## Phase 2 — Semantic analysis & LLVM (vertical slice)
 
-- [ ] Name resolution, type checker, borrow/ARC analysis
-- [ ] LLVM codegen via `inkwell` (LLVM 22)
-- [ ] Runtime: ARC, COW collections, panic/trap paths
-- [ ] `lang build` / `lang run` producing native binaries
-- [ ] Formatter (`lang fmt`) and fuller LSP (go-to-def, rename, inlay hints)
+- [x] Name resolution and type checker (`lllang-sema`, diagnostics LL1xxx / LL2xxx)
+- [x] HIR → MIR with ARC retain/release insertion (`lllang-mir`)
+- [x] LLVM 22 codegen via `inkwell` (`lllang-llvm`) + C runtime (`runtime/lllang_rt.c`)
+- [x] `lang check` with sema; `lang build` / `lang run` for native binaries
+- [x] Examples: `hello`, `errors`, `shapes-oop`, `shop-solution` (path deps / `Solution.ll`)
+
+### Phase 2.1 — next tooling pass
+
+- [ ] Formatter (`lang fmt`)
+- [ ] Fuller LSP (go-to-def, rename, inlay hints) on top of sema
+- [ ] Richer throwing ABI / COW collections / class vtables polish
 
 ## Phase 3 — Stdlib runtime & packages
 

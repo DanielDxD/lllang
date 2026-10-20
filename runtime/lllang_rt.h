@@ -19,6 +19,7 @@ typedef struct LlObjectHeader {
 /* --- ARC (payload pointer API) --- */
 
 void *ll_alloc(const LlTypeDesc *type);
+void *ll_alloc_sized(size_t payload_bytes);
 void *ll_retain(void *obj);
 void ll_release(void *obj);
 
@@ -52,6 +53,7 @@ void *ll_array_get_ptr(void *arr, size_t index);
 void ll_print(void *str);
 void ll_trap(const char *kind, const char *msg);
 int64_t ll_int_from_string(void *str, int *ok_out);
+double ll_double_sqrt(double x);
 
 /* User program entry (defined by compiled LLLang). */
 void ll_main(void);

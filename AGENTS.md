@@ -31,10 +31,19 @@ This repository defines **LLLang**, a compiled OOP language with Swift/C#-inspir
 - Do not invent GC, `node_modules`-style dependency trees, or recompile-from-source for published libraries.
 - Docs and public samples are **English**.
 
-## Phase-1 code
+## Phase-2 code
 
-- `crates/lllang-syntax` — parse only
-- `crates/lllang-lsp` — syntax diagnostics, symbols, folding, semantic tokens
-- `crates/lang` — CLI: `lsp`, `check`, `--version`; other commands may be stubs
+- `crates/lllang-syntax` — lexer/parser
+- `crates/lllang-manifest` — `Package.ll` / `Solution.ll` evaluation
+- `crates/lllang-sema` — name resolution, type check, HIR (LL1xxx / LL2xxx)
+- `crates/lllang-mir` — HIR → MIR + ARC inserts; `--emit-mir`
+- `crates/lllang-llvm` — inkwell LLVM 22 codegen + link (`LLVM_SYS_221_PREFIX`)
+- `runtime/lllang_rt.c` — ARC, strings, arrays, print, traps
+- `crates/lllang-lsp` — syntax + sema diagnostics
+- `crates/lang` — `check`, `build`, `run`, `lsp`, `--version`
+
+Requires **LLVM 22** (`brew install llvm@22`, export `LLVM_SYS_221_PREFIX=/opt/homebrew/opt/llvm@22`).
+
+Phase 2.1 still pending: `lang fmt`, go-to-def / rename in LSP.
 
 When unsure, prefer updating the **specification** over inventing runtime behavior.

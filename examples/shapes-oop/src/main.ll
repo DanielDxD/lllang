@@ -15,20 +15,14 @@ public struct Circle(radius: Double): Drawable {
     }
 }
 
-public class Polygon(public let sides: Int, public let sideLength: Double): Drawable {
-    public virtual func draw() -> String {
+public struct Polygon(sides: Int, sideLength: Double): Drawable {
+    public func draw() -> String {
         "polygon sides=\(sides) len=\(sideLength)"
     }
 }
 
-public class ShapeBase: Drawable {
-    public virtual func draw() -> String {
-        "shape"
-    }
-}
-
-public class Square(side: Double): ShapeBase {
-    public override func draw() -> String {
+public struct Square(side: Double): Drawable {
+    public func draw() -> String {
         "square side=\(side)"
     }
 }

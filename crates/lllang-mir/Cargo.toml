@@ -7,3 +7,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+lllang-sema = { workspace = true }
+indexmap = { workspace = true }
+
+[dev-dependencies]
+lllang-sema = { workspace = true }

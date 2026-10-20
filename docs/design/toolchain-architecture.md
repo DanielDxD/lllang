@@ -1,6 +1,6 @@
 # Toolchain architecture
 
-The LLLang toolchain is a Rust workspace that shares front-end artifacts between the CLI, batch checker, and Language Server. LLVM-based codegen arrives in Phase 2; Phase 1 delivers specification fidelity, parsing, and editor-facing diagnostics.
+The LLLang toolchain is a Rust workspace that shares front-end artifacts between the CLI, batch checker, and Language Server. Phase 2 delivers sema → MIR/ARC → LLVM 22 (`inkwell`) → native `lang build`/`run`; see ADRs [007](adr/007-error-abi.md) and [008](adr/008-object-layout.md).
 
 ## Workspace layout
 
@@ -26,7 +26,7 @@ Future crates (Phase 2+) are expected to split concerns further:
 | `lllang-llvm` | inkwell bindings, LLVM 22 emission |
 | `lllang-pack` | `.bll` / `.sbl` packaging and ABI metadata |
 
-Keeping Phase 1 lean avoids maintaining empty codegen paths before semantics exist.
+Phase 2 crates `lllang-manifest`, `lllang-sema`, `lllang-mir`, and `lllang-llvm` implement the vertical compile slice; `runtime/lllang_rt.c` provides ARC and core builtins.
 
 ## Compilation pipeline
 
@@ -55,7 +55,7 @@ flowchart LR
   end
 ```
 
-### Phase 1 (current)
+### Phase 1 (complete)
 
 | Stage | Output | User-visible |
 |-------|--------|--------------|
@@ -84,7 +84,7 @@ Design constraint: **one parser** feeds CLI and LSP. No duplicate grammars in Ty
 - **IR ownership:** LLLang owns a thin mid-level layer (MIR) so ARC and calling conventions are not expressed ad hoc in every codegen path.
 - **LTO:** Optional thin LTO at link via `Package.ll` build settings.
 
-Phase 1 does not link LLVM; developers build syntax crates without installing LLVM.
+Phase 2 requires LLVM 22 (`LLVM_SYS_221_PREFIX`). Syntax-only crates still build without LLVM.
 
 ## Language Server (`tower-lsp`)
 
@@ -94,7 +94,7 @@ The `lllang-lsp` crate wraps `tower-lsp` on Tokio stdio. Phase 1 capabilities:
 - Document symbols, folding ranges, semantic tokens (syntax-kind based)
 - Incremental sync (`didChange` incremental text)
 
-Phase 2 adds go-to-definition, find references, and inlay hints from sema. Phase 4 adds type-aware completion and code actions.
+Phase 2 publishes sema diagnostics alongside syntax. Phase 2.1 adds go-to-definition, find references, and inlay hints. Phase 4 adds type-aware completion and code actions.
 
 See [ADR 006 — tower-lsp](adr/006-tower-lsp.md).
 

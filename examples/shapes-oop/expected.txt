@@ -1,0 +1,3 @@
+circle r=2.5
+polygon sides=5 len=3
+square side=4

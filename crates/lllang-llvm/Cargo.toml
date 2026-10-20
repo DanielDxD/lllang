@@ -7,3 +7,15 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+lllang-mir = { workspace = true }
+lllang-sema = { workspace = true }
+inkwell = { workspace = true }
+anyhow = { workspace = true }
+cc = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }
+
+[dev-dependencies]
+lllang-sema = { workspace = true }
+lllang-syntax = { workspace = true }
