@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "LLLang SBL",
+  "scopeName": "source.lllang.sbl",
+  "patterns": [
+    {
+      "name": "comment.line.sbl-header.lllang",
+      "match": "^//\\s*sbl-format:\\s*\\d+.*$"
+    },
+    {
+      "name": "meta.sbl-directive.lllang",
+      "match": "^(package|abi)\\s+.+$",
+      "captures": {
+        "1": { "name": "keyword.other.sbl.lllang" }
+      }
+    },
+    { "include": "source.lllang" }
+  ]
+}

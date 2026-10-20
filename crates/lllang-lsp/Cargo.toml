@@ -1,0 +1,16 @@
+[package]
+name = "lllang-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Language Server Protocol implementation for LLLang"
+
+[dependencies]
+lllang-syntax.workspace = true
+tower-lsp.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dashmap.workspace = true

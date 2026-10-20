@@ -1,0 +1,78 @@
+{
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "public class ${1:Name}(${2:params})${3: : ${4:Super}} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Class with primary constructor"
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": [
+      "public struct ${1:Name}(${2:params})${3: : ${4:Protocol}} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Struct with primary constructor"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "public enum ${1:Name} {",
+      "\tcase ${2:value}",
+      "\t$0",
+      "}"
+    ],
+    "description": "Enum declaration"
+  },
+  "Function": {
+    "prefix": "func",
+    "body": [
+      "public func ${1:name}(${2:params})${3: -> ${4:ReturnType}} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function declaration"
+  },
+  "Protocol": {
+    "prefix": "protocol",
+    "body": [
+      "public protocol ${1:Name} {",
+      "\tfunc ${2:requirement}()${3: -> ${4:Type}}",
+      "\t$0",
+      "}"
+    ],
+    "description": "Protocol declaration"
+  },
+  "Switch": {
+    "prefix": "switch",
+    "body": [
+      "switch ${1:value} {",
+      "\tcase ${2:pattern} => ${3:result},",
+      "\tdefault => ${4:fallback},",
+      "}"
+    ],
+    "description": "Switch expression"
+  },
+  "Guard": {
+    "prefix": "guard",
+    "body": [
+      "guard ${1:condition} else {",
+      "\t${2:throw ${3:Error}()}",
+      "}",
+      "$0"
+    ],
+    "description": "Guard statement"
+  },
+  "Throws function": {
+    "prefix": "throws",
+    "body": [
+      "public func ${1:name}(${2:params}) throws(${3:ErrorType}) -> ${4:ReturnType} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function that throws a typed error"
+  }
+}

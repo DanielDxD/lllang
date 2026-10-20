@@ -1,0 +1,102 @@
+{
+  "name": "lllang",
+  "displayName": "LLLang",
+  "description": "Syntax highlighting, snippets, and LSP integration for LLLang (.ll, .sbl, .mll)",
+  "version": "0.1.0",
+  "publisher": "lllang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:lllang"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "lllang",
+        "aliases": [
+          "LLLang",
+          "lllang"
+        ],
+        "extensions": [
+          ".ll"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "lllang-sbl",
+        "aliases": [
+          "LLLang SBL",
+          "sbl"
+        ],
+        "extensions": [
+          ".sbl"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "lllang-mll",
+        "aliases": [
+          "LLLang MLL",
+          "mll",
+          "TOON manifest"
+        ],
+        "extensions": [
+          ".mll"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lllang",
+        "scopeName": "source.lllang",
+        "path": "./syntaxes/lllang.tmLanguage.json"
+      },
+      {
+        "language": "lllang-sbl",
+        "scopeName": "source.lllang.sbl",
+        "path": "./syntaxes/sbl.tmLanguage.json"
+      },
+      {
+        "language": "lllang-mll",
+        "scopeName": "source.lllang.mll",
+        "path": "./syntaxes/mll.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "lllang",
+        "path": "./snippets/lllang.json"
+      }
+    ],
+    "configuration": {
+      "title": "LLLang",
+      "properties": {
+        "lllang.serverPath": {
+          "type": "string",
+          "default": "lang",
+          "description": "Path to the LLLang CLI binary (runs `lang lsp` for the language server)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

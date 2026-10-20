@@ -1,0 +1,19 @@
+[package]
+name = "lang"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "LLLang command-line toolchain"
+
+[[bin]]
+name = "lang"
+path = "src/main.rs"
+
+[dependencies]
+lllang-syntax.workspace = true
+lllang-lsp.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tokio.workspace = true

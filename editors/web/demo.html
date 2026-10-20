@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLLang highlight.js demo</title>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css"
+    />
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 52rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        background: #0d1117;
+        color: #c9d1d9;
+      }
+      h1 {
+        font-weight: 600;
+        font-size: 1.35rem;
+      }
+      p {
+        color: #8b949e;
+      }
+      pre {
+        border-radius: 8px;
+        padding: 1rem !important;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>LLLang syntax highlighting</h1>
+    <p>
+      Sample uses modern LLLang style: no semicolons, primary constructors, switch
+      expressions, and string interpolation.
+    </p>
+    <pre><code class="language-lllang">namespace ShapesDemo
+
+import Std.IO
+
+public protocol Drawable {
+    func draw() -> String
+    func label() -> String {
+        draw()
+    }
+}
+
+public struct Circle(radius: Double): Drawable {
+    public func draw() -> String {
+        "circle r=\(radius)"
+    }
+}
+
+public class Polygon(
+    public let sides: Int,
+    public let sideLength: Double
+): Drawable {
+    public virtual func draw() -> String {
+        "polygon sides=\(sides) len=\(sideLength)"
+    }
+}
+
+public func main() throws(DecodingError) {
+    let shapes: [Drawable] = [
+        Circle(2.5),
+        Polygon(sides: 5, sideLength: 3.0),
+    ]
+
+    for shape in shapes {
+        let msg = switch shape is Circle {
+            true => "round: \(shape.label())",
+            false => shape.label(),
+        }
+        print(msg)
+    }
+
+    /* async-friendly HTTP fetch (illustrative) */
+    let body = await HTTP.get("https://api.example/v1/health")
+    guard body.status == 200 else {
+        throw NetworkError.unavailable
+    }
+}
+</code></pre>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="./highlightjs/lllang.js"></script>
+    <script>
+      document.querySelectorAll("pre code").forEach(function (block) {
+        hljs.highlightElement(block);
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,104 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "LLLang MLL",
+  "scopeName": "source.lllang.mll",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#document-start" },
+    { "include": "#keys" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#booleans" },
+    { "include": "#lists" },
+    { "include": "#anchors" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.lllang",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "document-start": {
+      "patterns": [
+        {
+          "name": "constant.language.document-start.lllang",
+          "match": "^---\\s*$"
+        }
+      ]
+    },
+    "keys": {
+      "patterns": [
+        {
+          "name": "entity.name.tag.yaml.lllang",
+          "match": "^\\s*([A-Za-z_][A-Za-z0-9_\\-]*)(?=\\s*:)"
+        },
+        {
+          "name": "entity.name.tag.yaml.lllang",
+          "match": "(?<=^\\s*-\\s)([A-Za-z_][A-Za-z0-9_\\-]*)(?=\\s*:)"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.lllang",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.lllang",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.unquoted.lllang",
+          "match": "(?<=:\\s)([A-Za-z0-9][A-Za-z0-9._@\\-]*)(?=\\s*$|\\s+#)"
+        },
+        {
+          "name": "string.unquoted.lllang",
+          "match": "(?<=:\\s)([A-Za-z0-9][A-Za-z0-9._@\\-]*)(?=\\s*,\\s*$)"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.lllang",
+          "match": "(?<=:\\s)[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.lllang",
+          "match": "\\b(true|false|null)\\b"
+        }
+      ]
+    },
+    "lists": {
+      "patterns": [
+        {
+          "name": "punctuation.definition.list.begin.lllang",
+          "match": "^\\s*-\\s"
+        }
+      ]
+    },
+    "anchors": {
+      "patterns": [
+        {
+          "name": "keyword.other.block-scalar.lllang",
+          "match": "\\|\\s*$"
+        },
+        {
+          "name": "constant.language.lllang",
+          "match": "lang:\\s*ll\\b"
+        }
+      ]
+    }
+  }
+}

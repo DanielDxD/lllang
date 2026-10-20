@@ -1,0 +1,624 @@
+(*
+  LLLang formal grammar (EBNF)
+  Version: 0.1 (Phase 1 specification)
+
+  Notation:
+    |     alternation
+    [ ]   optional (0 or 1)
+    { }   repetition (0 or more)
+    ( )   grouping
+    " "   literal terminals
+    ?     non-terminal
+
+  Semicolons are optional; newline may terminate statements when unambiguous.
+  Enum cases do not use the `case` keyword.
+*)
+
+(* ─── Compilation unit ─────────────────────────────────────────────── *)
+
+compilationUnit     = { topLevelDecl } ;
+
+topLevelDecl        = namespaceDecl
+                    | importDecl
+                    | typeDecl
+                    | funcDecl
+                    | varDecl
+                    | constDecl
+                    | extensionDecl
+                    | attributeDecl
+                    | conditionalBlock
+                    ;
+
+(* ─── Namespaces & imports ─────────────────────────────────────────── *)
+
+namespaceDecl       = { attribute } "namespace" qualifiedName [ ";" ] ;
+
+importDecl          = { attribute }
+                      "import" importPath
+                      [ "as" identifier ]
+                      [ ";" ] ;
+
+importPath          = qualifiedName
+                    | qualifiedName "." "*"
+                    ;
+
+qualifiedName       = identifier { "." identifier } ;
+
+(* ─── Attributes & conditional compilation ─────────────────────────── *)
+
+attribute           = "@" identifier [ attributeArgs ] ;
+
+attributeArgs       = "(" [ attributeArgList ] ")" ;
+
+attributeArgList    = attributeArg { "," attributeArg } [ "," ] ;
+
+attributeArg        = identifier [ ":" expr ]
+                    | expr
+                    ;
+
+attributeDecl       = attribute ;   (* file-level or orphan for tooling *)
+
+conditionalBlock    = "#if" expr conditionalMembers
+                      { "#elseif" expr conditionalMembers }
+                      [ "#else" conditionalMembers ]
+                      "#endif" ;
+
+conditionalMembers  = { topLevelDecl | memberDecl | stmt } ;
+
+(* ─── Type declarations ──────────────────────────────────────────────── *)
+
+typeDecl            = { attribute }
+                      accessModifier?
+                      typeKind identifier
+                      [ genericParams ]
+                      [ primaryCtor ]
+                      [ inheritanceClause ]
+                      [ genericConstraints ]
+                      typeBody ;
+
+typeKind            = "struct" | "class" | "enum" | "protocol" ;
+
+accessModifier      = "public" | "internal" | "private" | "fileprivate" ;
+
+inheritanceClause   = ":" inheritanceList ;
+
+inheritanceList     = inheritanceItem { "," inheritanceItem } ;
+
+inheritanceItem     = typeRef
+                    | protocolRef
+                    ;
+
+protocolRef         = identifier genericArgs? ;
+
+genericParams       = "<" genericParam { "," genericParam } [ "," ] ">" ;
+
+genericParam        = identifier [ ":" typeConstraint ] ;
+
+genericConstraints  = "where" genericConstraint { "," genericConstraint } ;
+
+genericConstraint   = typeRef ":" typeConstraint
+                    | typeRef "==" typeRef
+                    ;
+
+typeConstraint      = typeRef | "class" | "struct" | "enum" ;
+
+typeBody            = "{" { memberDecl } "}" ;
+
+memberDecl          = funcDecl
+                    | varDecl
+                    | initDecl
+                    | deinitDecl
+                    | nestedTypeDecl
+                    | subscriptDecl
+                    | operatorDecl
+                    | typeAliasDecl
+                    | conditionalBlock
+                    ;
+
+nestedTypeDecl      = typeDecl ;
+
+typeAliasDecl       = accessModifier? "typealias" identifier [ genericParams ] "=" typeRef [ ";" ] ;
+
+(* ─── Primary constructors ───────────────────────────────────────────── *)
+
+primaryCtor         = "(" [ primaryParamList ] ")" ;
+
+primaryParamList    = primaryParam { "," primaryParam } [ "," ] ;
+
+primaryParam        = accessModifier? parameterModifier? identifier ":" typeRef [ "=" expr ] ;
+
+parameterModifier   = "let" | "var" | "inout" | "weak" | "unowned" ;
+
+(* ─── Struct / class / enum specifics ────────────────────────────────── *)
+
+(* Enum cases: no `case` keyword *)
+enumCaseList        = enumCase { "," enumCase } [ "," ] ;
+
+enumCase            = identifier
+                      [ "(" enumCasePayload ")" ]
+                      [ "=" expr ]
+                      ;
+
+enumCasePayload     = enumCaseParam { "," enumCaseParam } [ "," ] ;
+
+enumCaseParam       = identifier ":" typeRef ;
+
+(* Protocol requirements *)
+protocolBody        = typeBody ;   (* same memberDecl grammar; requirements omit bodies *)
+
+(* ─── Initializers & deinit ──────────────────────────────────────────── *)
+
+initDecl            = accessModifier?
+                      "init" [ genericParams ]
+                      [ "(" paramList ")" ]
+                      [ genericConstraints ]
+                      [ throwsClause ]
+                      block ;
+
+deinitDecl          = "deinit" block ;
+
+(* ─── Functions & subscripts ─────────────────────────────────────────── *)
+
+funcDecl            = accessModifier?
+                      "func" identifier
+                      [ genericParams ]
+                      [ "(" paramList ")" ]
+                      [ arrowType ]
+                      [ genericConstraints ]
+                      [ throwsClause ]
+                      ( block | "=>" expr [ ";" ] )
+                      ;
+
+subscriptDecl       = accessModifier?
+                      "subscript"
+                      [ genericParams ]
+                      "(" paramList ")"
+                      "->" typeRef
+                      [ genericConstraints ]
+                      [ throwsClause ]
+                      ( block | "=>" expr [ ";" ] )
+                      ;
+
+operatorDecl        = accessModifier?
+                      "operator" operatorKind identifier
+                      [ genericParams ]
+                      [ "(" paramList ")" ]
+                      "->" typeRef
+                      block ;
+
+operatorKind        = "prefix" | "postfix" | "infix" ;
+
+paramList           = param { "," param } [ "," ] ;
+
+param               = externalName? internalName ":" typeRef [ "=" expr ] ;
+
+externalName        = identifier | "_" ;
+
+internalName        = identifier ;
+
+arrowType           = "->" typeRef ;
+
+throwsClause        = "throws" [ "(" typeRef { "," typeRef } ")" ] ;
+
+(* ─── Properties & variables ─────────────────────────────────────────── *)
+
+varDecl             = accessModifier?
+                      "var" patternInitializerList
+                      [ ";" ] ;
+
+letDecl               = accessModifier?
+                      "let" patternInitializerList
+                      [ ";" ] ;
+
+constDecl           = accessModifier?
+                      "const" identifier [ ":" typeRef ] "=" expr [ ";" ] ;
+
+patternInitializerList = patternInitializer { "," patternInitializer } [ "," ] ;
+
+patternInitializer  = pattern [ typeAnnotation ] [ "=" expr ]
+                    | identifier ":" typeRef [ "=" expr ]
+                    ;
+
+typeAnnotation      = ":" typeRef ;
+
+computedProperty    = accessModifier?
+                      "var" identifier ":" typeRef
+                      ( block | "=>" expr [ ";" ] )
+                      ;
+
+propertyObserver    = "willSet" [ "(" identifier ")" ] block
+                      "didSet" [ "(" identifier ")" ] block
+                      ;
+
+(* member var with observers or accessor keywords *)
+memberVarDecl       = accessModifier?
+                      ( "var" | "let" )
+                      identifier ":" typeRef
+                      [ "=" expr ]
+                      [ propertyObserver ]
+                      [ ";" ]
+                      ;
+
+(* ─── Types ──────────────────────────────────────────────────────────── *)
+
+typeRef             = optionalType
+                    | functionType
+                    | tupleType
+                    | nominalType
+                    | genericType
+                    | attributedType
+                    ;
+
+attributedType      = "@" identifier typeRef ;
+
+optionalType        = typeRef "?" ;
+
+functionType        = "(" [ functionParamTypes ] ")" "->" typeRef [ throwsSuffix ] ;
+
+throwsSuffix        = "throws" [ "(" typeRef { "," typeRef } ")" ] ;
+
+functionParamTypes  = functionParamType { "," functionParamType } [ "," ] ;
+
+functionParamType   = typeRef | identifier ":" typeRef ;
+
+tupleType           = "(" tupleTypeElem { "," tupleTypeElem } [ "," ] ")" ;
+
+tupleTypeElem       = identifier ":" typeRef | typeRef ;
+
+nominalType         = identifier ;
+
+genericType         = identifier genericArgs ;
+
+genericArgs         = "<" typeRef { "," typeRef } [ "," ] ">" ;
+
+(* ─── Patterns ───────────────────────────────────────────────────────── *)
+
+pattern             = wildcardPattern
+                    | identifierPattern
+                    | typedPattern
+                    | tuplePattern
+                    | enumCasePattern
+                    | optionalSomePattern
+                    | optionalNonePattern
+                    | valuePattern
+                    | rangePattern
+                    | bindingPattern
+                    | patternGuard
+                    ;
+
+wildcardPattern     = "_" ;
+
+identifierPattern   = identifier ;
+
+typedPattern        = pattern ":" typeRef ;
+
+tuplePattern        = "(" [ pattern { "," pattern } [ "," ] ] ")" ;
+
+enumCasePattern     = "." identifier
+                      [ "(" pattern { "," pattern } [ "," ] ")" ]
+                    | typeRef "." identifier
+                      [ "(" pattern { "," pattern } [ "," ] ")" ]
+                    ;
+
+optionalSomePattern = ".some" "(" pattern ")" ;
+
+optionalNonePattern = ".none" | "nil" ;
+
+valuePattern        = literal ;
+
+rangePattern        = expr "..." expr
+                    | expr "..<" expr
+                    ;
+
+bindingPattern      = "let" pattern
+                    | "var" pattern
+                    ;
+
+patternGuard        = pattern "where" expr ;
+
+(* ─── Expressions ────────────────────────────────────────────────────── *)
+
+expr                = assignmentExpr ;
+
+assignmentExpr      = tryExpr [ assignmentOp tryExpr ] ;
+
+assignmentOp        = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
+
+tryExpr             = [ "try" ] awaitExpr ;
+
+awaitExpr           = [ "await" ] nilCoalesceExpr ;
+
+nilCoalesceExpr     = ternaryExpr { "??" ternaryExpr } ;
+
+ternaryExpr         = logicalOrExpr [ "?" expr ":" expr ] ;
+
+logicalOrExpr       = logicalAndExpr { "||" logicalAndExpr } ;
+
+logicalAndExpr      = bitwiseOrExpr { "&&" bitwiseOrExpr } ;
+
+bitwiseOrExpr       = bitwiseXorExpr { "|" bitwiseXorExpr } ;
+
+bitwiseXorExpr      = bitwiseAndExpr { "^" bitwiseAndExpr } ;
+
+bitwiseAndExpr      = equalityExpr { "&" equalityExpr } ;
+
+equalityExpr        = relationalExpr { ( "==" | "!=" ) relationalExpr } ;
+
+relationalExpr      = rangeExpr { ( "<" | "<=" | ">" | ">=" ) rangeExpr } ;
+
+rangeExpr           = shiftExpr [ rangeOp shiftExpr ] ;
+
+rangeOp             = "..." | "..<" ;
+
+shiftExpr           = additiveExpr { ( "<<" | ">>" ) additiveExpr } ;
+
+additiveExpr        = multiplicativeExpr { ( "+" | "-" ) multiplicativeExpr } ;
+
+multiplicativeExpr  = castExpr { ( "*" | "/" | "%" ) castExpr } ;
+
+castExpr            = prefixExpr { ( "as" | "as?" | "as!" ) typeRef } ;
+
+prefixExpr          = prefixOp* postfixExpr ;
+
+prefixOp            = "!" | "-" | "+" | "~" | "&" | "*" ;
+
+postfixExpr         = primaryExpr { postfixOp } ;
+
+postfixOp           = callSuffix
+                    | subscriptSuffix
+                    | memberSuffix
+                    | optionalChainSuffix
+                    | forcedUnwrapSuffix
+                    | postfixOperator
+                    ;
+
+callSuffix          = "(" [ argumentList ] ")" ;
+
+argumentList        = argument { "," argument } [ "," ] ;
+
+argument            = [ identifier ":" ] expr ;
+
+subscriptSuffix     = "[" expr { "," expr } [ "," ] "]" ;
+
+memberSuffix        = "." identifier ;
+
+optionalChainSuffix = "?." identifier
+                    | "?[" expr "]"
+                    | "?(" [ argumentList ] ")"
+                    ;
+
+forcedUnwrapSuffix  = "!" ;
+
+postfixOperator     = operator ;   (* user-defined postfix *)
+
+primaryExpr         = literal
+                    | identifier
+                    | "self" | "Self" | "super"
+                    | parenExpr
+                    | arrayExpr
+                    | dictExpr
+                    | closureExpr
+                    | ifExpr
+                    | switchExpr
+                    | unsafeExpr
+                    ;
+
+parenExpr           = "(" expr ")" ;
+
+arrayExpr           = "[" [ expr { "," expr } [ "," ] ] "]" ;
+
+dictExpr            = "[" dictEntry { "," dictEntry } [ "," ] "]" ;
+
+dictEntry           = expr ":" expr ;
+
+closureExpr         = "{" [ closureCaptureList ] [ closureParamList ] [ "->" typeRef ] closureBody "}" ;
+
+closureCaptureList  = capture { "," capture } [ "," ] ;
+
+capture             = identifier | "self" ;
+
+closureParamList    = closureParam { "," closureParam } [ "," ] ;
+
+closureParam        = identifier
+                    | identifier ":" typeRef
+                    | pattern
+                    ;
+
+closureBody         = expr | block ;
+
+ifExpr              = "if" ifCondition block
+                      { "elseif" ifCondition block }
+                      [ "else" ( block | ifExpr | exprArm ) ]
+                    | "if" ifCondition "=>" expr
+                      { "elseif" ifCondition "=>" expr }
+                      [ "else" "=>" expr ]
+                    ;
+
+ifCondition         = expr | "let" pattern [ "=" expr ] | "var" pattern [ "=" expr ] ;
+
+switchExpr          = "switch" expr "{" switchArm { switchArm } [ "default" "=>" expr ] "}" ;
+
+switchArm           = pattern [ "where" expr ] "=>" expr
+                    | pattern [ "where" expr ] block
+                    ;
+
+exprArm             = "=>" expr ;
+
+unsafeExpr          = "unsafe" ( block | parenExpr ) ;
+
+(* ─── Statements ─────────────────────────────────────────────────────── *)
+
+stmt                = exprStmt
+                    | varDecl
+                    | letDecl
+                    | returnStmt
+                    | throwStmt
+                    | breakStmt
+                    | continueStmt
+                    | guardStmt
+                    | whileStmt
+                    | repeatStmt
+                    | forStmt
+                    | doStmt
+                    | deferStmt
+                    | labeledStmt
+                    | block
+                    ;
+
+exprStmt            = expr [ ";" ] ;
+
+returnStmt          = "return" [ expr ] [ ";" ] ;
+
+throwStmt           = "throw" expr [ ";" ] ;
+
+breakStmt           = "break" [ identifier ] [ ";" ] ;
+
+continueStmt        = "continue" [ identifier ] [ ";" ] ;
+
+guardStmt           = "guard" guardCondition else block [ ";" ] ;
+
+guardCondition      = expr | "let" pattern "=" expr ;
+
+whileStmt           = [ label ":" ] "while" expr block ;
+
+repeatStmt          = [ label ":" ] "repeat" block "while" expr [ ";" ] ;
+
+forStmt             = [ label ":" ] "for" forPattern "in" expr [ "where" expr ] block ;
+
+forPattern          = pattern ;
+
+doStmt              = "do" block catchClause { catchClause } ;
+
+catchClause         = "catch" [ pattern ] ( block | "=>" expr ) ;
+
+deferStmt           = "defer" block [ ";" ] ;
+
+labeledStmt         = identifier ":" stmt ;
+
+block               = "{" { stmt | memberDecl } "}" ;
+
+(* ─── Literals ───────────────────────────────────────────────────────── *)
+
+literal             = integerLiteral
+                    | floatLiteral
+                    | decimalLiteral
+                    | booleanLiteral
+                    | nilLiteral
+                    | characterLiteral
+                    | stringLiteral
+                    | regexLiteral
+                    ;
+
+integerLiteral      = decimalInteger | binaryInteger | octalInteger | hexInteger ;
+
+decimalInteger      = digit { digit | "_" } [ intSuffix ] ;
+
+binaryInteger       = "0b" binDigit { binDigit | "_" } [ intSuffix ] ;
+
+octalInteger        = "0o" octDigit { octDigit | "_" } [ intSuffix ] ;
+
+hexInteger          = "0x" hexDigit { hexDigit | "_" } [ intSuffix ] ;
+
+intSuffix           = "i8" | "i16" | "i32" | "i64" | "i128"
+                    | "u8" | "u16" | "u32" | "u64" | "u128"
+                    ;
+
+floatLiteral        = digit { digit | "_" } "." digit { digit | "_" } [ exponent ] [ floatSuffix ]
+                    | digit { digit | "_" } exponent [ floatSuffix ]
+                    ;
+
+exponent            = ( "e" | "E" ) [ "+" | "-" ] digit { digit | "_" } ;
+
+floatSuffix         = "f32" | "f64" ;
+
+decimalLiteral      = floatLiteral "d" | digit { digit | "_" } "d" ;
+
+booleanLiteral      = "true" | "false" ;
+
+nilLiteral          = "nil" ;
+
+characterLiteral    = "'" ( escape | ~["'","\\","\n","\r"] ) "'" ;
+
+stringLiteral       = stringSegment { stringSegment } ;
+
+stringSegment       = normalString | rawString | interpolatedString ;
+
+interpolatedString  = "\\(" expr [ "," formatSpec ] ")" ;
+
+formatSpec          = identifier { "." identifier [ "(" [ argumentList ] ")" ] } ;
+
+rawString           = "#" stringQuote { ~stringQuote } stringQuote "#" ; (* # count matched *)
+
+normalString        = '"' { escape | ~["\"","\\","\n","\r"] } '"' ;
+
+regexLiteral        = "/" regexBody "/" [ regexOptions ] ;
+
+regexBody           = (* implementation-defined; excludes unescaped closing / *) ;
+
+regexOptions        = identifier ;
+
+(* ─── Lexical tokens (reference) ─────────────────────────────────────── *)
+
+digit               = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+binDigit            = "0" | "1" ;
+octDigit            = digit ;
+hexDigit            = digit | "A" | "B" | "C" | "D" | "E" | "F" | "a" | "b" | "c" | "d" | "e" | "f" ;
+
+identifier          = identifierStart { identifierContinue } | "`" keyword "`" ;
+
+identifierStart     = letter | "_" | unicodeLetter ;
+
+identifierContinue  = identifierStart | unicodeDigit ;
+
+letter              = "A".."Z" | "a".."z" ;
+
+keyword             = reservedKeyword ;   (* see keywords.md *)
+
+operator            = operatorHead { operatorChar } ;
+
+operatorHead        = "." | "=" | "+" | "-" | "*" | "/" | "%" | "<" | ">" | "&" | "|" | "^" | "~" | "?" | "!" ;
+
+operatorChar        = operatorHead | ":" ;
+
+escape              = "\\" ( "n" | "r" | "t" | "0" | "\\" | "'" | "\"" | "u{" hexDigit { hexDigit } "}" ) ;
+
+stringQuote         = '"' ;
+
+(* ─── Extensions ─────────────────────────────────────────────────────── *)
+
+extensionDecl       = { attribute }
+                      "extension" typeRef
+                      [ genericParams ]
+                      [ inheritanceClause ]
+                      [ genericConstraints ]
+                      typeBody ;
+
+(* ─── Unsafe blocks ──────────────────────────────────────────────────── *)
+
+unsafeBlock         = "unsafe" block ;
+
+(* ─── Generics usage in expressions ──────────────────────────────────── *)
+
+specializationExpr  = identifier genericArgs ;   (* e.g. Array<Int>(...) *)
+
+(* ─── Notes (non-normative) ──────────────────────────────────────────── *)
+
+(*
+  1. Newlines may act as statement separators when the next token cannot
+     continue the previous expression (see language/01-lexical-structure.md).
+
+  2. Trailing commas are permitted in lists marked with [ "," ] above.
+
+  3. Enum cases in source use bare identifiers; `Error` protocol marks
+     error enums for typed throws.
+
+  4. `catch (e) => expr` is parsed as doStmt with catchClause using => form.
+
+  5. Member access on enum cases inside functions uses leading `.caseName`.
+
+  6. Protocols and classes are reference types; structs and enums are values.
+
+  7. `weak` and `unowned` apply only to class references.
+
+  8. Phase 1 parsers may reject constructs marked experimental in the guide.
+*)

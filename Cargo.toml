@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lllang-syntax",
+    "crates/lllang-lsp",
+    "crates/lang",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/lllang-lang/llang"
+authors = ["LLLang Contributors"]
+
+[workspace.dependencies]
+lllang-syntax = { path = "crates/lllang-syntax" }
+lllang-lsp = { path = "crates/lllang-lsp" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower-lsp = "0.20"
+dashmap = "6"

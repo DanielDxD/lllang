@@ -1,0 +1,232 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "LLLang",
+  "scopeName": "source.lllang",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#attributes" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.lllang",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "captures": {
+            "0": { "name": "punctuation.definition.comment.lllang" }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.lllang",
+          "match": "//.*$",
+          "captures": {
+            "0": { "name": "punctuation.definition.comment.lllang" }
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.lllang",
+          "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "punctuation.definition.attribute.lllang" },
+            "2": { "name": "entity.name.tag.attribute.lllang" }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.lllang",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            { "include": "#string-interpolation" },
+            {
+              "name": "constant.character.escape.lllang",
+              "match": "\\\\([\"\\\\nrt0]|u\\{[0-9A-Fa-f]+\\})"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.lllang",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "include": "#string-interpolation" },
+            {
+              "name": "constant.character.escape.lllang",
+              "match": "\\\\([\"\\\\nrt0]|u\\{[0-9A-Fa-f]+\\})"
+            }
+          ]
+        }
+      ]
+    },
+    "string-interpolation": {
+      "patterns": [
+        {
+          "name": "meta.embedded.line.lllang",
+          "begin": "\\\\\\(",
+          "end": "\\)",
+          "patterns": [
+            { "include": "#comments" },
+            { "include": "#strings" },
+            { "include": "#numbers" },
+            { "include": "#keywords" },
+            { "include": "#types" },
+            { "include": "#constants" },
+            { "include": "#operators" },
+            { "include": "#identifiers" }
+          ]
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.lllang",
+          "match": "'(?:\\\\.|[^'\\\\])'",
+          "captures": {
+            "0": { "name": "string.quoted.single.lllang" }
+          }
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.lllang",
+          "match": "\\b0[xX][0-9A-Fa-f_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.lllang",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.lllang",
+          "match": "\\b[0-9][0-9_]*\\.[0-9_]+([eE][+-]?[0-9_]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.lllang",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow.lllang",
+          "match": "\\b(if|else|elseif|guard|while|repeat|for|in|switch|default|where|break|continue|return|throw|throws|try|catch|do|defer|fallthrough)\\b"
+        },
+        {
+          "name": "keyword.declaration.lllang",
+          "match": "\\b(namespace|import|public|private|protected|internal|fileprivate|struct|class|enum|protocol|extension|func|let|var|const|typealias|init|deinit|subscript|operator|async|await|unsafe|static|override|virtual|abstract|sealed|inout|weak|unowned|mut|get|set|didSet|willSet)\\b"
+        },
+        {
+          "name": "keyword.operator.word.lllang",
+          "match": "\\b(is|as|and|or|not)\\b"
+        },
+        {
+          "name": "keyword.other.lllang",
+          "match": "\\b(self|Self|super|nil)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.lllang",
+          "match": "\\b(Void|Never|Any|Bool|String|Character|Int|Int8|Int16|Int32|Int64|UInt|UInt8|UInt16|UInt32|UInt64|Float|Double|Optional|Result|Array|Dictionary|Set|Codable|Equatable|Hashable|Sendable|DecodingError|EncodingError)\\b"
+        },
+        {
+          "name": "entity.name.type.lllang",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.lllang",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.nil.lllang",
+          "match": "\\bnil\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.lllang",
+          "match": "(-?>|=>|\\->)"
+        },
+        {
+          "name": "keyword.operator.assignment.lllang",
+          "match": "(\\+=|-=|\\*=|/=|%=|\\=)"
+        },
+        {
+          "name": "keyword.operator.comparison.lllang",
+          "match": "(===|!==|==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.lllang",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.bitwise.lllang",
+          "match": "(<<|>>|&|\\||\\^|~)"
+        },
+        {
+          "name": "keyword.operator.range.lllang",
+          "match": "(\\.\\.\\.|\\.\\.<)"
+        },
+        {
+          "name": "keyword.operator.nilcoalescing.lllang",
+          "match": "\\?\\?"
+        },
+        {
+          "name": "keyword.operator.optional.lllang",
+          "match": "\\?\\."
+        },
+        {
+          "name": "keyword.operator.arithmetic.lllang",
+          "match": "(\\+|\\-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.other.lllang",
+          "match": "(\\.|,|:|;|\\?|@)"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.property.lllang",
+          "match": "(?<=\\.)[a-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "entity.name.function.lllang",
+          "match": "(?<=\\bfunc\\s+)[a-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "variable.other.readwrite.lllang",
+          "match": "\\b[a-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}
