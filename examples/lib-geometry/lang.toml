@@ -1,9 +1,0 @@
-[package]
-name = "lib.geometry"
-version = "0.1.0"
-kind = "lib"
-
-[build]
-public-api = ["src/**/*.ll"]
-
-[dependencies]

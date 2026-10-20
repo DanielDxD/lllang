@@ -12,7 +12,7 @@ Typical layout:
 
 ```text
 my.server/
-  lang.toml
+  Package.ll
   package.mll
   src/
     main.ll
@@ -92,16 +92,13 @@ public struct Main {
 | stdio | Cursor, Claude Desktop, local agents |
 | HTTP + SSE | Remote shared servers (auth required) |
 
-Configure in `lang.toml`:
+Configure transport via `Package.ll` settings or runtime flags:
 
-```toml
-[package]
-kind = "app"
-
-[mcp]
-transport = "stdio"
-# transport = "http"
-# bind = "127.0.0.1:8787"
+```ll
+settings: [
+    .define("MCP_STDIO", .when(configuration: .debug)),
+    // .define("MCP_HTTP_BIND", "127.0.0.1:8787"),
+]
 ```
 
 ## Security

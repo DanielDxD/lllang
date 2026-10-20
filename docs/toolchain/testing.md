@@ -91,7 +91,7 @@ Mark with `@Test(integration: true)` when supported.
 - run: lang test --workspace -- --parallel 2
 ```
 
-Requires lockfile committed and store cache keyed by `lang.lock` hashes.
+Requires lockfile committed and store cache keyed by `Package.lock` hashes.
 
 ## Relationship to `check`
 

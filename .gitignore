@@ -14,8 +14,8 @@
 
 # Lang local (never commit resolved store links)
 .lang/
-lang.lock
-!examples/**/lang.lock
+Package.lock
+!examples/**/Package.lock
 
 # Node (editor extensions)
 node_modules/

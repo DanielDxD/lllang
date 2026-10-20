@@ -11,7 +11,8 @@ The **`lang`** binary is the unified entry point for project scaffolding, builds
 | `-v`, `--verbose` | Increase log detail |
 | `-q`, `--quiet` | Errors only |
 | `--color auto\|always\|never` | Diagnostic colors |
-| `--manifest PATH` | Use `lang.toml` other than cwd default |
+| `--manifest PATH` | Use `Package.ll` other than cwd default |
+| `--solution PATH` | Use `Solution.ll` for monorepo commands |
 | `--offline` | Refuse network for package commands |
 
 **Phase 1 implemented:** `--version`, `--info` (minimal), global help.
@@ -20,8 +21,9 @@ The **`lang`** binary is the unified entry point for project scaffolding, builds
 
 | Command | Status | Summary |
 |---------|--------|---------|
-| `new` | Planned | Scaffold from template |
-| `build` | Planned | Compile package or workspace |
+| `new` | Planned | Scaffold from template (including `solution`) |
+| `build` | Planned | Compile package or solution members |
+| `solution` | Planned | Add/list/remove solution members |
 | `run` | Planned | Build (if needed) and run executable |
 | `watch` | Planned | Rebuild/rerun on file changes |
 | `test` | Planned | Run unit/integration tests |
@@ -61,18 +63,33 @@ lang new <template> -n <name> [--path DIR]
 | `agent` | Agent/automation project |
 | `mcp` | MCP server template |
 | `bench` | Benchmark harness |
+| `solution` | Monorepo root (`Solution.ll`) |
 
 See [Templates](templates.md) for directory trees.
+
+---
+
+## `lang new solution`
+
+Scaffold a monorepo with `Solution.ll`, starter `packages/`, and `apps/`:
+
+```bash
+lang new solution -n shop [--path DIR]
+```
+
+See [Solutions](solutions.md) and the `solution` template in [Templates](templates.md).
 
 ---
 
 ## `lang build`
 
 ```bash
-lang build [--release] [--target TRIPLE] [--package NAME] [-w]
+lang build [--release] [--target TRIPLE] [--product NAME] [--project NAME] [--all] [-w]
 ```
 
-- Compiles current package or workspace member
+- Compiles the current package, or solution `defaultProjects` when `Solution.ll` is present
+- `--project NAME` builds one member (and its path dependencies)
+- `--all` builds every project listed in `Solution.ll`
 - Libraries emit `.bll` under `targets/` when `--pack` is combined (see `pack`)
 - `-w` treats warnings as errors
 
@@ -84,7 +101,7 @@ lang build [--release] [--target TRIPLE] [--package NAME] [-w]
 lang run [--release] [--] [ARGS...]
 ```
 
-Requires `[package] kind = "app"` and valid entry. Forwards args to `main`.
+Requires an executable **product** in `Package.ll`. Forwards args to `main`.
 
 ---
 
@@ -174,7 +191,7 @@ lang add <package>[@range] [...]
 lang add --dev test.utils@^1.0
 ```
 
-Updates `lang.toml` and `lang.lock`, fetches into global store.
+Updates `Package.ll` dependencies and `Package.lock`, fetches into global store.
 
 ### `lang remove`
 
@@ -188,7 +205,7 @@ lang remove <package> [...]
 lang restore [--force]
 ```
 
-Installs exact versions from `lang.lock`; verifies `.sbl`/`.bll` hashes.
+Installs exact versions from `Package.lock`; verifies `.sbl`/`.bll` hashes.
 
 ### `lang update`
 
@@ -248,7 +265,21 @@ lang sdk install <target-triple>
 lang sdk remove <target-triple>
 ```
 
-Manages LLVM/sysroot bundles for cross-compilation. Configured under `[sdk]` in manifest.
+Manages LLVM/sysroot bundles for cross-compilation. Configured via `Package.ll` `settings:` / environment (see [Manifest](manifest.md)).
+
+---
+
+## `lang solution`
+
+Manage members of a `Solution.ll` monorepo (planned):
+
+```bash
+lang solution list
+lang solution add <path>
+lang solution remove <name>
+```
+
+`lang new lib -n Foo --path packages/Foo --solution .` creates a package and registers it in the solution.
 
 ---
 
@@ -282,7 +313,7 @@ No flags in Phase 1; configuration via editor client.
 
 1. CLI flags
 2. Environment (`LANG_*`)
-3. `lang.toml` `[build]` / `[package]`
+3. `Package.ll` / `Solution.ll` evaluated settings
 4. User config `~/.lang/config.toml` (planned)
 5. Toolchain defaults
 
@@ -302,5 +333,6 @@ Stubs may print guidance pointing to this page and [ROADMAP](../../ROADMAP.md).
 ## See also
 
 - [Manifest](manifest.md)
+- [Solutions](solutions.md)
 - [Build pipeline](build-pipeline.md)
 - [Installation](../getting-started/installation.md)

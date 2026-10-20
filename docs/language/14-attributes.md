@@ -116,7 +116,7 @@ User-defined attributes will target meta-programming and source generators:
 public struct Point(x: Double, y: Double)
 ```
 
-Phase 1 tooling ignores unknown attributes with a warning unless registered in `lang.toml`.
+Phase 1 tooling ignores unknown attributes with a warning unless registered in `Package.ll` toolchain metadata (planned).
 
 ## Attribute placement
 

@@ -9,7 +9,7 @@ description: Use LLLang standard library modules (Std.Json, Std.Http, Std.IO, St
 
 - **`Std.Core`** is implicit (Optional, Result, Error, Equatable, etc.).
 - Import by module: `import Std.Json`, `import Std.Http`, `import Std.IO`.
-- Stdlib ships as prebuilt `.bll` + `.sbl`; pin via `lang.lock`.
+- Stdlib ships as prebuilt `.bll` + `.sbl`; pin via `Package.lock`.
 
 ## Common modules
 

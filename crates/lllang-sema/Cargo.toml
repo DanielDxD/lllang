@@ -1,0 +1,16 @@
+[package]
+name = "lllang-sema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+lllang-syntax.workspace = true
+thiserror.workspace = true
+indexmap.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

@@ -50,7 +50,7 @@ Assembles a single TOON document for injection into agent prompts.
 1. Workspace root `package.mll` (if present)
 2. Each dependency’s `.mll` from the lockfile (respecting `tokens.priority`)
 3. Optional `--include-sources` public `.ll` excerpts (signatures + doc comments only)
-4. Manifest metadata from `lang.toml` (name, version, targets)
+4. Manifest metadata from `Package.ll` (name, products, targets)
 
 ### Trimming (`tokens` in `.mll`)
 

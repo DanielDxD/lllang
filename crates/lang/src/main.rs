@@ -20,6 +20,14 @@ struct Cli {
     /// Print extended toolchain information
     #[arg(long)]
     info: bool,
+
+    /// Path to Package.ll (default: ./Package.ll)
+    #[arg(long, global = true)]
+    manifest: Option<PathBuf>,
+
+    /// Path to Solution.ll (default: ./Solution.ll when present)
+    #[arg(long, global = true)]
+    solution: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -34,12 +42,18 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
-    /// Build the current project
+    /// Build the current package or solution
     Build {
         #[arg(long)]
         release: bool,
         #[arg(long)]
         target: Option<String>,
+        /// Solution member package name / override
+        #[arg(long)]
+        project: Option<String>,
+        /// Build every solution member
+        #[arg(long)]
+        all: bool,
     },
     /// Build and run
     Run {
@@ -97,6 +111,21 @@ enum Commands {
     },
     /// Start the Language Server over stdio (Phase 1)
     Lsp,
+    /// Manage Solution.ll monorepos (.NET-style)
+    Solution {
+        #[command(subcommand)]
+        cmd: SolutionCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SolutionCmd {
+    /// List member packages
+    List,
+    /// Register a package path in Solution.ll
+    Add { path: PathBuf },
+    /// Remove a member by name or path
+    Remove { name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -156,11 +185,18 @@ fn run() -> Result<()> {
         }
         Some(Commands::Check { paths }) => cmd_check(paths),
         Some(Commands::New { list, .. }) if list => {
-            println!("Templates: console, lib, cli, web, test, agent, mcp, bench");
+            println!(
+                "Templates: console, lib, cli, web, test, agent, mcp, bench, solution"
+            );
             planned("new")
         }
         Some(Commands::New { .. }) => planned("new"),
         Some(Commands::Build { .. }) => planned("build"),
+        Some(Commands::Solution { cmd }) => match cmd {
+            SolutionCmd::List => planned("solution list"),
+            SolutionCmd::Add { .. } => planned("solution add"),
+            SolutionCmd::Remove { .. } => planned("solution remove"),
+        },
         Some(Commands::Run { .. }) => planned("run"),
         Some(Commands::Watch) => planned("watch"),
         Some(Commands::Test { .. }) => planned("test"),

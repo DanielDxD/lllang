@@ -21,7 +21,7 @@
 ## Phase 3 — Stdlib runtime & packages
 
 - [ ] Implement `Std.*` modules (Json, Toon, Async, Llm, …)
-- [ ] Global package store + resolver + `lang.lock`
+- [ ] Global package store + resolver + `Package.lock`
 - [ ] `.bll` packing (`lang pack`) and registry protocol
 - [ ] Cross-target builds
 

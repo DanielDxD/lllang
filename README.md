@@ -85,7 +85,9 @@ lang check src/   # Syntax check (phase 1)
 lang llm gen      # Generate .mll
 ```
 
-Templates: `console`, `lib`, `cli`, `web`, `test`, `agent`, `mcp`, `bench`.
+Each package is described by **`Package.ll`** (SwiftPM-style manifest DSL). Monorepos add root **`Solution.ll`** (.NET solution-style) — see `examples/shop-solution/` and [Solutions](docs/toolchain/solutions.md).
+
+Templates: `console`, `lib`, `cli`, `web`, `test`, `agent`, `mcp`, `bench`, `solution`.
 
 ## Documentation
 

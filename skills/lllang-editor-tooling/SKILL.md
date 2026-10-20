@@ -15,7 +15,7 @@ Capabilities (syntax-focused today): parse diagnostics, document symbols, foldin
 
 ## Formatter
 
-- `lang fmt` (planned) formats `.ll` only — not `.sbl`, `.mll`, or `lang.toml`.
+- `lang fmt` (planned) formats `.ll` only — not `.sbl`, `.mll`, `Package.ll`, or `Solution.ll`.
 - Newline-terminated style; no mandatory semicolons.
 
 ## Highlighting

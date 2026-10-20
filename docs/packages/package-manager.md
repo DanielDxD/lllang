@@ -29,7 +29,7 @@ Project-local `.lang/` holds build caches only, not a full dependency mirror.
 
 When the compiler needs package `acme.widgets`:
 
-1. Read version from `lang.lock` (or resolve from `lang.toml` ranges if lock missing)
+1. Read version from `Package.lock` (or resolve from `Package.ll` dependency requirements if lock missing)
 2. Locate store entry by package id + version + content hashes
 3. Load **`package.sbl`** into the module graph (**first**)
 4. Select **`targets/<triple>.bll`** matching build target (**second**)
@@ -52,15 +52,16 @@ See [CLI reference](../toolchain/cli-reference.md).
 
 ## Dependency kinds
 
-```toml
-[dependencies]
-runtime = "^1.0"       # implicit section (normal keys)
+Runtime dependencies live in `Package.ll` `dependencies:`:
 
-[dependencies.dev]
-test.helpers = "^0.2"  # tests/benches only
+```ll
+dependencies: [
+    .package(id: "acme.math", from: "1.0.0"),
+    .package(path: "../LocalKit"),
+]
 ```
 
-Dev dependencies never appear in published library metadata or consumer lockfiles for those consumers.
+Dev-only dependencies attach on **test targets** (`.product(name:package:)` or registry ids), not in a separate manifest table. They never appear in published library metadata or consumer lockfiles for those consumers.
 
 ## Transitive dependencies
 
@@ -72,7 +73,7 @@ Transitives are **closed over `.bll` link requirements**, not over source. Each 
 lang restore --offline
 ```
 
-Uses store only. CI caches `~/.lang/store` keyed by `lang.lock` hash.
+Uses store only. CI caches `~/.lang/store` keyed by `Package.lock` hash.
 
 Corporate mirrors set:
 
@@ -91,7 +92,7 @@ export LANG_REGISTRY=https://registry.internal/lang/
 
 ## Security
 
-- Hashes in `lang.lock` pin exact blobs
+- Hashes in `Package.lock` pin exact blobs
 - `lang publish` signs packages (planned: sigstore / minisign)
 - Registry TLS required; `--insecure` disabled in release builds
 
@@ -108,3 +109,4 @@ export LANG_REGISTRY=https://registry.internal/lang/
 - [Registry protocol](registry-protocol.md)
 - [Versioning & ABI](versioning-and-abi.md)
 - [Manifest](../toolchain/manifest.md)
+- [Solutions](../toolchain/solutions.md)

@@ -86,10 +86,11 @@ Diagnostics expand to type errors, unused bindings, and ABI export gaps in libra
 
 ## Multi-root workspaces
 
-Monorepos with multiple `lang.toml` files:
+Monorepos with `Solution.ll` and member `Package.ll` files:
 
+- Opening the solution root enables multi-package diagnostics (planned)
 - One LSP instance per editor window root (default)
-- Future: workspace folders with per-folder manifest detection
+- Future: workspace folders with per-folder `Package.ll` detection
 
 ## Performance
 

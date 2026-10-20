@@ -1,11 +1,12 @@
 # Project templates
 
-`lang new <template> -n <name>` scaffolds a directory with `lang.toml`, starter `.ll` sources, and optional CI/editor files. Templates align with [manifest](manifest.md) conventions and [project anatomy](../getting-started/project-anatomy.md).
+`lang new <template> -n <name>` scaffolds a directory with `Package.ll`, starter `.ll` sources, and optional CI/editor files. Templates align with [manifest](manifest.md) conventions and [project anatomy](../getting-started/project-anatomy.md).
 
 Global options:
 
 ```bash
 lang new <template> -n NAME [--path DIR] [--no-git]
+lang new solution -n NAME [--path DIR]   # monorepo scaffold
 ```
 
 ---
@@ -16,24 +17,31 @@ Minimal executable application.
 
 ```text
 hello/
-  lang.toml
-  src/
+  Package.ll
+  Sources/Hello/
     main.ll
   .gitignore
   README.md
 ```
 
-`lang.toml`:
+`Package.ll`:
 
-```toml
-[package]
-name = "hello"
-version = "0.1.0"
-kind = "app"
-entry = "src/main.ll"
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "hello",
+    products: [
+        .executable(name: "hello", targets: ["Hello"]),
+    ],
+    targets: [
+        .executableTarget(name: "Hello", path: "Sources/Hello"),
+    ],
+)
 ```
 
-`src/main.ll`:
+`Sources/Hello/main.ll`:
 
 ```ll
 namespace Hello
@@ -53,22 +61,28 @@ Publishable library with public API stub.
 
 ```text
 acme-widgets/
-  lang.toml
-  src/
+  Package.ll
+  Sources/Widgets/
     lib.ll
-  tests/
+  Tests/WidgetsTests/
     lib_test.ll
   README.md
 ```
 
-```toml
-[package]
-name = "acme.widgets"
-version = "0.1.0"
-kind = "lib"
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
 
-[build]
-public-api = ["src/**/*.ll"]
+let package = Package(
+    name: "acme.widgets",
+    products: [
+        .library(name: "Widgets", targets: ["Widgets"]),
+    ],
+    targets: [
+        .target(name: "Widgets", path: "Sources/Widgets"),
+        .testTarget(name: "WidgetsTests", dependencies: ["Widgets"], path: "Tests/WidgetsTests"),
+    ],
+)
 ```
 
 ```ll
@@ -85,14 +99,30 @@ Command-line tool with argument parsing (uses `Std.Cli` when available).
 
 ```text
 mycli/
-  lang.toml
-  src/
+  Package.ll
+  Sources/MyCli/
     main.ll
     commands/
       run.ll
       version.ll
-  tests/
+  Tests/MyCliTests/
     cli_test.ll
+```
+
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "mycli",
+    products: [
+        .executable(name: "mycli", targets: ["MyCli"]),
+    ],
+    targets: [
+        .executableTarget(name: "MyCli", path: "Sources/MyCli"),
+        .testTarget(name: "MyCliTests", dependencies: ["MyCli"], path: "Tests/MyCliTests"),
+    ],
+)
 ```
 
 ```ll
@@ -115,20 +145,35 @@ Web-oriented layout (HTTP server + static assets).
 
 ```text
 myweb/
-  lang.toml
-  src/
+  Package.ll
+  Sources/MyWeb/
     main.ll
     routes/
       health.ll
   assets/
     index.html
-  tests/
+  Tests/MyWebTests/
     routes_test.ll
 ```
 
-```toml
-[package.resources]
-paths = ["assets/**"]
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "myweb",
+    products: [
+        .executable(name: "myweb", targets: ["MyWeb"]),
+    ],
+    targets: [
+        .executableTarget(
+            name: "MyWeb",
+            path: "Sources/MyWeb",
+            resources: [.copy("assets")],
+        ),
+        .testTarget(name: "MyWebTests", dependencies: ["MyWeb"], path: "Tests/MyWebTests"),
+    ],
+)
 ```
 
 ---
@@ -139,16 +184,32 @@ Test-first package (library under test + harness).
 
 ```text
 math-extra/
-  lang.toml
-  src/
+  Package.ll
+  Sources/MathExtra/
     extra.ll
-  tests/
+  Tests/MathExtraTests/
     extra_test.ll
-  tests/fixtures/
+  Tests/fixtures/
     cases.toon
 ```
 
-Emphasizes `tests/` and sample `@Test` functions.
+Emphasizes `Tests/` and sample `@Test` functions.
+
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "math.extra",
+    products: [
+        .library(name: "MathExtra", targets: ["MathExtra"]),
+    ],
+    targets: [
+        .target(name: "MathExtra", path: "Sources/MathExtra"),
+        .testTarget(name: "MathExtraTests", dependencies: ["MathExtra"], path: "Tests/MathExtraTests"),
+    ],
+)
+```
 
 ---
 
@@ -158,13 +219,28 @@ Automation / LLM agent project with `.mll` stub.
 
 ```text
 my-agent/
-  lang.toml
-  src/
+  Package.ll
+  Sources/MyAgent/
     main.ll
     agent.ll
   package.mll
   skills/
     README.md
+```
+
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "my.agent",
+    products: [
+        .executable(name: "my-agent", targets: ["MyAgent"]),
+    ],
+    targets: [
+        .executableTarget(name: "MyAgent", path: "Sources/MyAgent"),
+    ],
+)
 ```
 
 ```ll
@@ -186,8 +262,8 @@ public func main() {
 
 ```text
 my-mcp/
-  lang.toml
-  src/
+  Package.ll
+  Sources/MyMcp/
     main.ll
     server.ll
     tools/
@@ -197,14 +273,25 @@ my-mcp/
   README.md
 ```
 
-```toml
-[package]
-name = "my.mcp"
-kind = "app"
-entry = "src/main.ll"
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
 
-[build]
-define = { MCP_STDIO = "true" }
+let package = Package(
+    name: "my.mcp",
+    products: [
+        .executable(name: "my-mcp", targets: ["MyMcp"]),
+    ],
+    targets: [
+        .executableTarget(
+            name: "MyMcp",
+            path: "Sources/MyMcp",
+        ),
+    ],
+    settings: [
+        .define("MCP_STDIO", .when(configuration: .debug)),
+    ],
+)
 ```
 
 Documents stdio transport and tool registration patterns.
@@ -217,13 +304,29 @@ Benchmark harness.
 
 ```text
 mybench/
-  lang.toml
-  src/
+  Package.ll
+  Sources/MyBench/
     lib.ll
   benches/
     fib.ll
-  tests/
+  Tests/MyBenchTests/
     smoke_test.ll
+```
+
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "mybench",
+    products: [
+        .library(name: "MyBench", targets: ["MyBench"]),
+    ],
+    targets: [
+        .target(name: "MyBench", path: "Sources/MyBench"),
+        .testTarget(name: "MyBenchTests", dependencies: ["MyBench"], path: "Tests/MyBenchTests"),
+    ],
+)
 ```
 
 ```ll
@@ -238,18 +341,114 @@ Run with `lang bench` (Phase 4+).
 
 ---
 
+## `solution`
+
+Monorepo scaffold with root `Solution.ll`, shared libraries under `packages/`, and apps under `apps/`. See [Solutions](solutions.md) and `examples/shop-solution/`.
+
+```text
+shop/
+  Solution.ll
+  Package.lock              # after first lang restore (optional at create)
+  packages/
+    Core/
+      Package.ll
+      Sources/Core/
+        geometry.ll
+  apps/
+    Cli/
+      Package.ll
+      Sources/Cli/
+        main.ll
+  README.md
+```
+
+`Solution.ll`:
+
+```ll
+// lang-tools-version: 0.1
+import Std.SolutionDescription
+
+let solution = Solution(
+    name: "Shop",
+    projects: [
+        .package(path: "packages/Core"),
+        .package(path: "apps/Cli"),
+    ],
+    defaultProjects: ["Cli"],
+)
+```
+
+`packages/Core/Package.ll`:
+
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "shop.core",
+    products: [
+        .library(name: "Core", targets: ["Core"]),
+    ],
+    targets: [
+        .target(name: "Core", path: "Sources/Core"),
+    ],
+)
+```
+
+`apps/Cli/Package.ll`:
+
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
+
+let package = Package(
+    name: "shop.cli",
+    products: [
+        .executable(name: "shop-cli", targets: ["Cli"]),
+    ],
+    dependencies: [
+        .package(path: "../../packages/Core"),
+    ],
+    targets: [
+        .executableTarget(
+            name: "Cli",
+            dependencies: [
+                .product(name: "Core", package: "shop.core"),
+            ],
+            path: "Sources/Cli",
+        ),
+    ],
+)
+```
+
+Create with:
+
+```bash
+lang new solution -n shop
+```
+
+Add a member later:
+
+```bash
+lang new lib -n Billing --path packages/Billing --solution .
+lang solution add packages/Billing
+```
+
+---
+
 ## Template matrix
 
-| Template | `kind` | Entry | Tests | `.mll` | Special dirs |
-|----------|--------|-------|-------|--------|--------------|
-| console | app | `main.ll` | — | — | — |
-| lib | lib | — | yes | — | — |
-| cli | app | `main.ll` | yes | — | `commands/` |
-| web | app | `main.ll` | yes | — | `assets/` |
-| test | lib | — | yes | — | `fixtures/` |
-| agent | app | `main.ll` | optional | yes | `skills/` |
-| mcp | app | `main.ll` | optional | yes | `mll/`, `tools/` |
-| bench | lib | — | smoke | — | `benches/` |
+| Template | Products | Layout | Tests | `.mll` | Special dirs |
+|----------|----------|--------|-------|--------|--------------|
+| console | executable | `Sources/<Target>/` | — | — | — |
+| lib | library | `Sources/` + `Tests/` | yes | — | — |
+| cli | executable | `Sources/` | yes | — | `commands/` |
+| web | executable | `Sources/` | yes | — | `assets/` |
+| test | library | `Sources/` + `Tests/` | yes | — | `fixtures/` |
+| agent | executable | `Sources/` | optional | yes | `skills/` |
+| mcp | executable | `Sources/` | optional | yes | `mll/`, `tools/` |
+| bench | library | `Sources/` + `Tests/` | smoke | — | `benches/` |
+| solution | many packages | `Solution.ll` + `packages/` + `apps/` | per member | optional | — |
 
 ---
 
@@ -262,4 +461,5 @@ Run with `lang bench` (Phase 4+).
 ## See also
 
 - [CLI `new`](cli-reference.md)
+- [Solutions](solutions.md)
 - [Hello, world](../getting-started/hello-world.md)

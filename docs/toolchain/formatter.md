@@ -58,7 +58,7 @@ public func foo(a: Int, b: String) -> Bool {
 
 ## Scope
 
-- Formats `.ll` only — not `.sbl`, `.mll`, or `lang.toml`
+- Formats `.ll` only — not `.sbl`, `.mll`, `Package.ll`, or `Solution.ll`
 - Generated `.sbl` from `lang pack` uses its own canonicalizer for hashes
 
 ## Editor integration
@@ -75,12 +75,13 @@ Fail the job if developers forgot to format.
 
 ## Configuration (planned)
 
-`lang.toml`:
+`Package.ll` (planned `settings:` keys) or user config:
 
-```toml
-[fmt]
-max-width = 100
-indent = 4
+```ll
+settings: [
+    // .fmtMaxWidth(100),
+    // .fmtIndent(4),
+]
 ```
 
 Until implemented, defaults above apply.

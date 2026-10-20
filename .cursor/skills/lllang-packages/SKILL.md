@@ -1,6 +1,6 @@
 ---
 name: lllang-packages
-description: Manage LLLang dependencies, lang.toml, lockfiles, and prebuilt .bll/.sbl artifacts. Use when adding deps, publishing libraries, or explaining the package model.
+description: Manage LLLang dependencies, Package.ll, Solution.ll, lockfiles, and prebuilt .bll/.sbl artifacts. Use when adding deps, publishing libraries, or explaining the package model.
 ---
 
 # LLLang packages
@@ -14,33 +14,39 @@ description: Manage LLLang dependencies, lang.toml, lockfiles, and prebuilt .bll
 
 ## Manifest essentials
 
-```toml
-[package]
-name = "acme.widgets"
-version = "1.0.0"
-kind = "lib"          # or console/app for executables
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
 
-[build]
-public-api = ["src/**/*.ll"]
-
-[dependencies]
-std.io = "^0.1"
+let package = Package(
+    name: "acme.widgets",
+    products: [
+        .library(name: "Widgets", targets: ["Widgets"]),
+    ],
+    dependencies: [
+        .package(id: "std.io", from: "0.1.0"),
+    ],
+    targets: [
+        .target(name: "Widgets", path: "Sources/Widgets"),
+        .testTarget(name: "WidgetsTests", dependencies: ["Widgets"], path: "Tests/WidgetsTests"),
+    ],
+)
 ```
 
 - Reverse-DNS package ids (`lib.geometry`, `acme.math`).
-- Apps: `entry = "src/main.ll"`.
-- Workspace roots use `[workspace]` with `members`.
+- Apps: `.executable` product + `.executableTarget`.
+- Monorepos: root **`Solution.ll`** + path deps (`.package(path: "../Core")`); no TOML `[workspace]`.
 
 ## Publishing
 
 - `lang pack` → registry archive; `lang publish` (Phase 3+).
-- Only **public** API appears in `.sbl`; honor `[build] public-api` globs.
+- Only **public** API appears in `.sbl`; honor export filters in `Package.ll` when set.
 - ABI stability: `@abi("symbol")` on exported members; semver + abi version in `.sbl` header.
 
 ## Agent rules
 
 - Never tell users to compile dependency source from git checkouts for normal apps.
-- Commit `lang.lock` for reproducible apps/CI.
+- Commit **`Package.lock`** for reproducible apps/CI (solution root or per-package).
 - When adding a local example library, include a checked-in `.sbl` stub if consumers typecheck against it offline.
 
-Docs: [docs/packages/package-manager.md](../../docs/packages/package-manager.md), [docs/toolchain/manifest.md](../../docs/toolchain/manifest.md), [docs/formats/sbl.md](../../docs/formats/sbl.md).
+Docs: [docs/packages/package-manager.md](../../docs/packages/package-manager.md), [docs/toolchain/manifest.md](../../docs/toolchain/manifest.md), [docs/toolchain/solutions.md](../../docs/toolchain/solutions.md), [docs/formats/sbl.md](../../docs/formats/sbl.md).

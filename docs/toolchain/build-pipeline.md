@@ -5,7 +5,7 @@ The LLLang build pipeline turns `.ll` sources and prebuilt `.bll` dependencies i
 ## High-level flow
 
 ```text
-lang.toml + lang.lock
+Package.ll (+ Solution.ll) + Package.lock
         │
         ▼
 ┌───────────────┐     ┌─────────────┐     ┌──────────────┐
@@ -33,10 +33,10 @@ lang.toml + lang.lock
 
 ### 1. Manifest and graph resolution
 
-- Read `[package]`, `[dependencies]`, `[workspace]`
-- Load `lang.lock`; fetch missing packages into `~/.lang/store`
+- Evaluate `Package.ll` (and `Solution.ll` when building a monorepo)
+- Load `Package.lock`; fetch missing packages into `~/.lang/store`
 - Build DAG of package references; reject cycles
-- Choose **host triple** or `--target` from `[build]` / CLI
+- Choose **host triple** or `--target` from `Package.ll` `settings:` / CLI
 
 ### 2. External interface loading
 
@@ -79,7 +79,7 @@ Consumers never parse dependency `.ll`.
 - Invoke platform linker (ld, lld, link.exe) with:
   - Objects from current package
   - Native object sections from dependency `.bll` files
-  - System libraries from `[build].link`
+  - System libraries from `Package.ll` `.linkedLibrary` settings
 - Apps → `.lang/build/bin/<name>`
 - Libs → `targets/<triple>.bll` via [pack](cli-reference.md#lang-pack)
 

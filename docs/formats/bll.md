@@ -81,7 +81,7 @@ Optional embedded data:
 
 - String pools for reflection / errors
 - Codable schema tables
-- Static assets declared in `lang.toml` `[package.resources]`
+- Static assets declared in `Package.ll` target `resources:` entries
 - Debug info bundles (split DWARF may live beside `.bll` in debug builds)
 
 Resources are read-only at runtime; mutable state stays in normal `.ll` static initialization linked from native objects.

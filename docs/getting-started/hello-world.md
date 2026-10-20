@@ -29,11 +29,11 @@ Every app and library uses the same skeleton (details in [Project anatomy](proje
 
 ```text
 hello/
-  lang.toml          # package manifest
-  lang.lock          # pinned dependency graph (after lang add)
-  src/
+  Package.ll         # package manifest (SwiftPM-style DSL)
+  Package.lock       # pinned dependency graph (after lang add)
+  Sources/Hello/
     main.ll          # entry for executables
-  tests/
+  Tests/HelloTests/
     hello_test.ll    # optional; lang test
 ```
 
@@ -59,7 +59,7 @@ lang run                  # build if needed, then execute
 lang run -- arg1 arg2
 ```
 
-`lang run` respects `[build]` settings in `lang.toml` (output name, target triple, optimization).
+`lang run` respects build settings from `Package.ll` (`settings:`, product name, `--release`).
 
 ## Watch mode (planned)
 

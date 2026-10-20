@@ -41,6 +41,8 @@ The LLLang standard library ships as prebuilt **`.bll`** artifacts referenced fr
 | [Llm](llm.md) | `Std.Llm` | Chat models, tools, structured output |
 | [Memory](memory.md) | `Std.Memory` | `Arena`, `Pool`, scratch buffers |
 | [FFI](ffi.md) | `Std.FFI` | C ABI helpers atop language `unsafe` |
+| [PackageDescription](package-description.md) | `Std.PackageDescription` | Evaluate `Package.ll` manifests (toolchain only) |
+| [SolutionDescription](solution-description.md) | `Std.SolutionDescription` | Evaluate `Solution.ll` monorepo roots (toolchain only) |
 
 ## Typical imports
 
@@ -59,7 +61,7 @@ public async func main() throws(AppError) {
 
 ## Platform and targets
 
-Stdlib builds are published per target triple in the package registry. Your `lang.lock` pins exact `.bll` hashes. Features that need OS services (FS, Process, Net) are unavailable on bare-metal targets unless noted in module docs.
+Stdlib builds are published per target triple in the package registry. Your `Package.lock` pins exact `.bll` hashes. Features that need OS services (FS, Process, Net) are unavailable on bare-metal targets unless noted in module docs.
 
 ## Versioning
 

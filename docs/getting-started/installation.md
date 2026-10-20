@@ -61,7 +61,7 @@ Download from GitHub Releases, extract, and place `lang` on your `PATH`. Release
 
 1. Install the **LLLang** extension from the marketplace (or load `editors/vscode` in development mode).
 2. Point the extension at your `lang` binary, or rely on `PATH`.
-3. Open a folder containing `lang.toml` so the LSP activates.
+3. Open a folder containing `Package.ll` (or a monorepo root with `Solution.ll`) so the LSP activates.
 
 Web sites can use Shiki or highlight.js grammars from `editors/web` — see [Editor support](../toolchain/editor-support.md).
 
@@ -85,5 +85,5 @@ Web sites can use Shiki or highlight.js grammars from `editors/web` — see [Edi
 ## Next steps
 
 - [Hello, world](hello-world.md) — create a project and run checks
-- [Project anatomy](project-anatomy.md) — `lang.toml`, sources, and lockfile
+- [Project anatomy](project-anatomy.md) — `Package.ll`, sources, and lockfile
 - [CLI reference](../toolchain/cli-reference.md) — full command surface

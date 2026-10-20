@@ -1,137 +1,143 @@
 # Project anatomy
 
-An LLLang **package** is a directory with a `lang.toml` manifest, source under `src/`, optional tests, and (for applications) a defined entry point. Workspaces can group multiple packages. This page maps folders and files to toolchain behavior.
+An LLLang **package** is a directory with a `Package.ll` manifest (SwiftPM-style), sources under `Sources/`, optional tests under `Tests/`, and one or more **products**. A **solution** (`Solution.ll`) groups many packages for monorepos (.NET-style).
 
-## Top-level layout
+## Top-level layout (single package)
 
 ```text
-my-app/
-  lang.toml              # required manifest
-  lang.lock              # generated lockfile (after restore/add)
-  .lang/                 # local cache (gitignored); build artifacts
-  src/                   # .ll source
-  tests/                 # test sources (lang test)
-  benches/               # benchmarks (lang bench)
-  docs/                  # optional human docs (lang doc may include)
-  assets/                # bundled resources (referenced from manifest)
-  skills/                # optional agent skill packs (LLM workflows)
+MyApp/
+  Package.ll               # required manifest (LLLang DSL)
+  Package.lock             # generated lockfile (after restore/add)
+  .lang/                   # local cache (gitignored); build artifacts
+  Sources/
+    MyApp/                 # default: Sources/<TargetName>/
+      main.ll
+  Tests/
+    MyAppTests/
+      MyAppTests.ll
+  docs/                    # optional human docs
+  assets/                  # bundled resources (referenced from Package.ll)
 ```
 
-Libraries and apps share the same shape; only `[package]` `kind` and entry configuration differ.
+## `Package.ll`
 
-## `lang.toml`
-
-The manifest drives name, version, dependencies, build settings, and SDK pins. Full reference: [Manifest](../toolchain/manifest.md).
+Declarative LLLang, not TOML. Full reference: [Manifest](../toolchain/manifest.md).
 
 Minimal executable:
 
-```toml
-[package]
-name = "my-app"
-version = "0.1.0"
-kind = "app"
-entry = "src/main.ll"
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
 
-[build]
-target = "native"
+let package = Package(
+    name: "my-app",
+    products: [
+        .executable(name: "my-app", targets: ["MyApp"]),
+    ],
+    targets: [
+        .executableTarget(name: "MyApp", path: "Sources/MyApp"),
+    ],
+)
 ```
 
-Minimal library (published as `.sbl` + per-target `.bll`):
+Minimal library:
 
-```toml
-[package]
-name = "acme.widgets"
-version = "1.0.0"
-kind = "lib"
+```ll
+// lang-tools-version: 0.1
+import Std.PackageDescription
 
-[build]
-public-api = "src/**/*.ll"   # globs exported to .sbl
+let package = Package(
+    name: "acme.widgets",
+    products: [
+        .library(name: "Widgets", targets: ["Widgets"]),
+    ],
+    targets: [
+        .target(name: "Widgets", path: "Sources/Widgets"),
+        .testTarget(name: "WidgetsTests", dependencies: ["Widgets"]),
+    ],
+)
 ```
 
-## Source tree (`src/`)
+## Source tree
 
 | Pattern | Role |
 |---------|------|
-| `src/main.ll` | Default entry for `kind = "app"` |
-| `src/lib.ll` or module files | Library root modules |
-| `src/**/*.ll` | Additional modules; namespaces mirror folder layout by convention |
+| `Sources/<Target>/main.ll` | Entry for executable targets |
+| `Sources/<Target>/**/*.ll` | Module sources |
+| `Tests/<Target>/**/*.ll` | `lang test` discovery |
 
-**Namespaces** in source (`namespace Acme.Widgets`) align with package name segments but are not required to match filesystem paths — the compiler resolves modules via `import` and manifest roots.
+**Namespaces** in source (`namespace Acme.Widgets`) align with package name segments by convention; the compiler resolves modules via `import` and package targets.
 
-Phase 1: only parsing and `lang check`. Phase 2+: module graph, typecheck, codegen.
+## Lockfile (`Package.lock`)
 
-## Tests (`tests/`)
-
-Test projects use the **test** template or a `tests/` folder:
-
-```text
-tests/
-  widgets_test.ll
-```
-
-`lang test` discovers tests marked with attributes or naming conventions (see [Testing](../toolchain/testing.md)). Tests compile against the same dependency graph as the main package.
-
-## Lockfile (`lang.lock`)
-
-After `lang add`, `lang update`, or `lang restore`, the lockfile records:
-
-- Exact dependency versions
-- Content hashes of `.bll` / `.sbl` blobs
-- Target-specific `.bll` selections
-
-Commit `lang.lock` for applications and binaries; libraries may commit it for reproducible CI. Never hand-edit.
-
-## Local cache (`.lang/`)
-
-Build outputs, incremental IR, and fetched package extractions may live under `.lang/`. Safe to delete; `lang clean` removes it. Not published to registries.
+After `lang add`, `lang update`, or `lang restore`, the lockfile records exact versions and content hashes of `.bll` / `.sbl` blobs. Commit it for applications. Never hand-edit.
 
 ## Dependencies on disk
 
-There is **no** `node_modules` tree of source. Resolved packages appear as:
+There is **no** `node_modules` tree of source. Resolved packages live in the global store:
 
 ```text
 ~/.lang/store/<hash>/...
-  manifest.toml
+  Package.ll          # cached manifest snapshot
   package.sbl
   targets/
     aarch64-apple-darwin.bll
-    x86_64-unknown-linux-gnu.bll
 ```
 
-The compiler reads `.sbl` for types and links `.bll` for the active target. See [Package manager](../packages/package-manager.md).
+See [Package manager](../packages/package-manager.md).
 
-## Workspace (monorepo)
+## Solution layout (monorepo)
 
-```toml
-[workspace]
-members = ["packages/*", "apps/cli"]
-default-member = "apps/cli"
+```text
+Shop/
+  Solution.ll
+  Package.lock              # shared lock (optional)
+  packages/
+    Core/Package.ll
+    Billing/Package.ll
+  apps/
+    Api/Package.ll
+    Cli/Package.ll
 ```
 
-`lang build` at the workspace root builds the default member or all members with `--workspace`. Shared `[workspace.dependencies]` pin versions across members.
+```ll
+// Solution.ll
+// lang-tools-version: 0.1
+import Std.SolutionDescription
+
+let solution = Solution(
+    name: "Shop",
+    projects: [
+        .package(path: "packages/Core"),
+        .package(path: "packages/Billing"),
+        .package(path: "apps/Api"),
+        .package(path: "apps/Cli"),
+    ],
+    defaultProjects: ["Api", "Cli"],
+)
+```
+
+Details: [Solutions](../toolchain/solutions.md).
 
 ## Artifacts you ship
 
 | Kind | Ship to registry | Ship to end users |
 |------|------------------|-------------------|
-| App | — | Native binary (or bundle) |
-| Library | `.sbl` + `.bll` per target | Same (via dependency) |
-| MCP / agent template | Package + `.mll` | Template + metadata |
-
-`lang pack` produces a registry-ready archive; `lang publish` uploads it (Phase 3+).
+| Executable product | — | Native binary |
+| Library product | `.sbl` + `.bll` per target | Via dependency |
+| Agent / MCP package | Package + `.mll` | Template + metadata |
 
 ## `.gitignore` recommendations
 
 ```gitignore
 .lang/
-target/           # if using cargo adjacency for native shims
-*.bll             # except checked-in examples
-lang.lock         # only if you intentionally float deps (unusual)
+*.bll
+Package.lock   # only if you intentionally float deps (unusual)
 ```
 
 ## Related docs
 
 - [Manifest](../toolchain/manifest.md)
+- [Solutions](../toolchain/solutions.md)
 - [Templates](../toolchain/templates.md)
-- [Build pipeline](../toolchain/build-pipeline.md)
 - [`.ll` format](../formats/ll.md)

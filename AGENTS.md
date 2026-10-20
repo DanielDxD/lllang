@@ -26,6 +26,7 @@ This repository defines **LLLang**, a compiled OOP language with Swift/C#-inspir
 
 - **No semicolons** required; no `null`; no `new`; no Swift external argument labels / `_`.
 - Prefer **primary constructors**, expression `switch`/`if`, typed `throws(E)`, and `catch` expression handlers.
+- Package manifests are **`Package.ll`** (SwiftPM-style DSL), not TOML. Monorepos use root **`Solution.ll`** (.NET solution-style) plus path deps between packages. Lockfile: **`Package.lock`**.
 - Keep examples under `examples/` valid against the grammar.
 - Do not invent GC, `node_modules`-style dependency trees, or recompile-from-source for published libraries.
 - Docs and public samples are **English**.

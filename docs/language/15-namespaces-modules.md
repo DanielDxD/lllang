@@ -1,6 +1,6 @@
 # Namespaces and modules
 
-A **package** is the unit of compilation, versioning, and dependency (`lang.toml`). **Namespaces** organize source within a package into logical names similar to C# namespaces, without requiring one type per file.
+A **package** is the unit of compilation, versioning, and dependency (`Package.ll`). **Namespaces** organize source within a package into logical names similar to C# namespaces, without requiring one type per file.
 
 **Related:** [Declarations](03-declarations.md) · [Attributes](14-attributes.md)
 

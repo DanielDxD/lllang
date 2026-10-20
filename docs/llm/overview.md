@@ -19,7 +19,7 @@ LLLang treats **LLM-assisted development** as a first-class concern: compact met
 1. Write public API in `.ll` with `///` docs.
 2. Run `lang llm gen` to refresh machine sections of `.mll`.
 3. Hand-edit `pitfalls`, `conventions`, and examples.
-4. Check in `.mll` next to `lang.toml`.
+4. Check in `.mll` next to `Package.ll`.
 
 ### Building a coding agent in LLLang
 

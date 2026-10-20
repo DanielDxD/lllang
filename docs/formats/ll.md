@@ -16,7 +16,7 @@ Application and library **authors** edit `.ll`. Dependency **consumers** normall
 ## File identity
 
 - One primary **module** per file is typical; large packages split by namespace across files.
-- The **package** name comes from `lang.toml` (`[package].name`), not from the filename.
+- The **package** name comes from `Package.ll` (`Package(name: …)`), not from the filename.
 - **Namespaces** (`namespace Acme.Billing`) organize declarations and affect name lookup in `import`.
 
 ## What goes in source

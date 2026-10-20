@@ -95,7 +95,7 @@ Example matching pair:
 
 ## Visibility
 
-Only **`public`** API appears in published `.sbl`. The `[build] public-api` glob in `lang.toml` may further restrict exports. `internal` and `fileprivate` declarations never ship.
+Only **`public`** API appears in published `.sbl`. Optional `publicHeaders` / export filters in `Package.ll` may further restrict exports. `internal` and `fileprivate` declarations never ship.
 
 ## Generated vs hand-maintained
 
@@ -119,7 +119,7 @@ Hand editing cannot introduce types that lack `.bll` backing.
 | `E_SBL_BLL_HASH` | Footer hash does not match store |
 | `E_MISSING_SYMBOL` | `@abi` entry missing in `.bll` table |
 
-Fix by `lang update` / pinning in `lang.lock`.
+Fix by `lang update` / pinning in `Package.lock`.
 
 ## See also
 

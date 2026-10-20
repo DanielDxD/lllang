@@ -82,7 +82,7 @@ Design constraint: **one parser** feeds CLI and LSP. No duplicate grammars in Ty
 - **Target:** LLVM 22 toolchains on macOS, Linux, Windows (matching CI images).
 - **Binding:** inkwell for structured IR builder API in Rust; fallback to llvm-sys for thin wrappers if needed.
 - **IR ownership:** LLLang owns a thin mid-level layer (MIR) so ARC and calling conventions are not expressed ad hoc in every codegen path.
-- **LTO:** Optional thin LTO at link via `lang.toml` `[build]` profile.
+- **LTO:** Optional thin LTO at link via `Package.ll` build settings.
 
 Phase 1 does not link LLVM; developers build syntax crates without installing LLVM.
 
@@ -109,7 +109,7 @@ See [ADR 006 — tower-lsp](adr/006-tower-lsp.md).
 | `lang add` / `pack` | 3 | Package graph + `.bll` publish |
 | `lang llm gen` | 3 | Emit `.mll` from module graph |
 
-Manifest: `lang.toml` (package name, targets, dependencies, feature flags for `#if`).
+Manifest: `Package.ll` / `Solution.ll` (package name, targets, dependencies, feature flags for `#if`).
 
 ## Editor integration
 

@@ -23,7 +23,7 @@ The package manager (`lang add`, lockfile) resolves **versions and targets**, fe
 
 Authors publish via `lang pack` (Phase 3), uploading artifacts to a registry. Local path overrides may point at source for library development only.
 
-Lockfile (`lang.lock`) records exact package versions, content hashes, and target matrix.
+Lockfile (`Package.lock`) records exact package versions, content hashes, and target matrix. Package metadata lives in evaluated **`Package.ll`** manifests (not TOML).
 
 ## Consequences
 

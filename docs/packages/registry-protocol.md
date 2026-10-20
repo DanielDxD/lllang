@@ -147,7 +147,7 @@ Read operations (search, download) are anonymous for public packages.
 
 ## Lockfile integration
 
-`lang restore` maps each `[[package]]` in `lang.lock` to:
+`lang restore` maps each package entry in `Package.lock` to:
 
 1. `GET manifest.json` (or cache) — verify version metadata
 2. `GET` each blob hash if absent from store

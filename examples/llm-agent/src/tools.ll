@@ -2,7 +2,7 @@ namespace LlmAgent
 
 import Std.Llm
 
-@tool(description: "Return the semver from lang.toml for this package.")
+@tool(description: "Return the package version from Package.ll / lock metadata.")
 public func packageVersion() -> String {
     "0.1.0"
 }

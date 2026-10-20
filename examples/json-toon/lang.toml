@@ -1,7 +1,0 @@
-[package]
-name = "json-toon"
-version = "0.1.0"
-kind = "console"
-entry = "src/main.ll"
-
-[dependencies]

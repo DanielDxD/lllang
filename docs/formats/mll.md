@@ -151,7 +151,7 @@ lang llm explain Std.Json.decode
 ## Conventions
 
 - Filename: `<package-name>.mll` or `package.mll` at package root
-- Check in alongside `lang.toml` for libraries meant for agent consumption
+- Check in alongside `Package.ll` for libraries meant for agent consumption
 - MCP templates include an `mll/` folder with tool descriptors (see [MCP](../llm/mcp.md))
 
 ## TOON encoding rules (reminder)

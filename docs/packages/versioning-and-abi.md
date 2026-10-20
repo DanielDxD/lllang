@@ -4,7 +4,7 @@ LLLang separates **package semver** (API/evolution for humans and the resolver) 
 
 ## Package versioning (semver)
 
-Published packages use **semantic versioning** in `lang.toml` and registries:
+Published packages use **semantic versioning** in registry metadata (resolved from `Package.ll` dependency requirements) and registries:
 
 | Bump | When |
 |------|------|
@@ -12,15 +12,16 @@ Published packages use **semantic versioning** in `lang.toml` and registries:
 | **MINOR** | Additive API (new types, methods with defaults) |
 | **PATCH** | Bug fixes, performance, no API/ABI surface change |
 
-Version requirements in manifests:
+Version requirements in `Package.ll`:
 
-```toml
-[dependencies]
-acme.math = "^1.4"   # >=1.4.0 <2.0.0
-std.json = "~0.2.1"    # >=0.2.1 <0.3.0
+```ll
+dependencies: [
+    .package(id: "acme.math", range: "^1.4"),
+    .package(id: "std.json", range: "~0.2.1"),
+]
 ```
 
-`lang.lock` pins exact versions and content hashes.
+`Package.lock` pins exact versions and content hashes.
 
 ### Source compatibility
 

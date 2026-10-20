@@ -43,7 +43,8 @@
 ## Toolchain
 
 - [CLI reference](toolchain/cli-reference.md)
-- [Manifest (`lang.toml`)](toolchain/manifest.md)
+- [Manifest (`Package.ll`)](toolchain/manifest.md)
+- [Solutions (`Solution.ll`)](toolchain/solutions.md)
 - [Templates](toolchain/templates.md)
 - [Build pipeline](toolchain/build-pipeline.md)
 - [Testing](toolchain/testing.md)
