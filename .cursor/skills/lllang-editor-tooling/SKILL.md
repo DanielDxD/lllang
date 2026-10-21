@@ -5,18 +5,21 @@ description: LLLang editor support — LSP, formatting, TextMate grammar, and VS
 
 # Editor tooling
 
-## Language Server (Phase 1)
+## Language Server
 
 ```bash
 lang lsp    # stdio; point editors at the lang binary
 ```
 
-Capabilities (syntax-focused today): parse diagnostics, document symbols, folding, semantic tokens where implemented. See [docs/toolchain/lsp.md](../../docs/toolchain/lsp.md).
+Capabilities: parse + sema diagnostics, document symbols, folding, go-to-definition, references, rename, inlay hints, typed hover, document formatting, type-aware completion (members after `.`), code action for missing `try` (LL2005). See [docs/toolchain/lsp.md](../../docs/toolchain/lsp.md).
+
+Tree-sitter stub: [`editors/tree-sitter-lllang`](../../editors/tree-sitter-lllang) (experimental; TextMate remains primary).
 
 ## Formatter
 
-- `lang fmt` (planned) formats `.ll` only — not `.sbl`, `.mll`, `Package.ll`, or `Solution.ll`.
-- Newline-terminated style; no mandatory semicolons.
+- `lang fmt [--check] [PATH...]` formats `.ll` source (4-space indent, soft wrap 100, sorted imports).
+- Does not rewrite `.sbl`, `.mll`, or lockfiles; `Package.ll` / `Solution.ll` are `.ll` DSL and format when included.
+- LSP `documentFormattingProvider` uses the same pretty-printer.
 
 ## Highlighting
 
@@ -26,8 +29,8 @@ Capabilities (syntax-focused today): parse diagnostics, document symbols, foldin
 
 ## Agent workflow
 
-1. After editing `.ll` in this repo, run `lang check` on touched paths.
-2. Keep examples parseable — Phase 1 CI may only syntax-check.
+1. After editing `.ll` in this repo, run `lang check` / `lang fmt --check` on touched paths.
+2. Keep examples buildable — `cargo test -p lang --test build_examples`.
 3. For LSP changes, workspace crate: `crates/lllang-lsp`; CLI: `crates/lang`.
 
 Editor overview: [docs/toolchain/editor-support.md](../../docs/toolchain/editor-support.md).

@@ -129,3 +129,65 @@ fn shop_solution() {
         &root.join("examples/shop-solution/expected.txt"),
     );
 }
+
+#[test]
+fn json_toon() {
+    let root = repo_root();
+    run_example(
+        &[
+            "run",
+            "--manifest",
+            root.join("examples/json-toon/Package.ll").to_str().unwrap(),
+        ],
+        &root.join("examples/json-toon/expected.txt"),
+    );
+}
+
+#[test]
+fn async_http() {
+    let root = repo_root();
+    run_example(
+        &[
+            "run",
+            "--manifest",
+            root.join("examples/async-http/Package.ll").to_str().unwrap(),
+        ],
+        &root.join("examples/async-http/expected.txt"),
+    );
+}
+
+#[test]
+fn llm_agent() {
+    let root = repo_root();
+    if !llvm_available() {
+        return;
+    }
+    let lang = lang_bin();
+    if !lang.exists() {
+        return;
+    }
+    let mut cmd = Command::new(&lang);
+    cmd.args([
+        "run",
+        "--manifest",
+        root.join("examples/llm-agent/Package.ll").to_str().unwrap(),
+    ]);
+    cmd.env("LANG_LLM_MOCK", "summary: llm-agent");
+    if let Ok(prefix) = std::env::var("LLVM_SYS_221_PREFIX") {
+        cmd.env("LLVM_SYS_221_PREFIX", prefix);
+    } else {
+        cmd.env("LLVM_SYS_221_PREFIX", "/opt/homebrew/opt/llvm@22");
+    }
+    let output = cmd.output().expect("run lang");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "llm-agent failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let expected = std::fs::read_to_string(root.join("examples/llm-agent/expected.txt")).unwrap();
+    assert!(
+        stdout.trim_end().ends_with(expected.trim_end()),
+        "stdout={stdout}\nexpected={expected}"
+    );
+}

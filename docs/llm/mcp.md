@@ -13,12 +13,13 @@ Typical layout:
 ```text
 my.server/
   Package.ll
-  package.mll
-  src/
+  Sources/MyServer/
     main.ll
-    tools.ll
+    tools/
+      echo.ll
   mll/
-    tools.toon
+    tools.mll
+  README.md
 ```
 
 The `mcp` template includes sample `@tool` handlers and a stdio MCP transport stub.

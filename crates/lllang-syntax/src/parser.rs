@@ -1769,7 +1769,12 @@ impl Parser {
         }
         if self.check_ident_start() {
             let name = self.parse_ident();
-            let generics = self.parse_type_generic_args();
+            // Disambiguate `Name<T>(...)` generics from `a < b` comparisons.
+            let generics = if self.looks_like_generic_args_ahead() {
+                self.parse_type_generic_args()
+            } else {
+                Vec::new()
+            };
             if !generics.is_empty() {
                 // Generic specialization call: Name<T>(...)
                 let span = span_from(start, self.prev_span());
@@ -1819,7 +1824,8 @@ impl Parser {
 
     fn parse_if_expr_parts(&mut self) -> (Vec<IfArm>, Option<IfElse>) {
         let mut arms = Vec::new();
-        while self.eat_kind(&TokenKind::If) {
+        // One `if` arm; further arms only via `else if` (not a following bare `if`).
+        if self.eat_kind(&TokenKind::If) {
             let start = self.prev_span().start;
             let condition = self.parse_if_condition();
             let body = if self.eat_kind(&TokenKind::FatArrow) {
@@ -2283,6 +2289,58 @@ impl Parser {
         matches!(self.current_kind(), TokenKind::Ident(_))
     }
 
+    /// True when `Ident` is followed by `<...>` that looks like type args (not `a < b`).
+    /// Requires a closing `>` whose following token is `(` or `.`.
+    fn looks_like_generic_args_ahead(&self) -> bool {
+        if !self.check_kind(&TokenKind::Lt) {
+            return false;
+        }
+        let Some(first) = self.tokens.get(self.pos + 1) else {
+            return false;
+        };
+        match &first.kind {
+            TokenKind::Integer(_)
+            | TokenKind::Float(_)
+            | TokenKind::String(_)
+            | TokenKind::Bool(_)
+            | TokenKind::Nil
+            | TokenKind::Minus
+            | TokenKind::LParen => return false,
+            TokenKind::Ident(_) | TokenKind::SelfUpper | TokenKind::LBracket => {}
+            _ => return false,
+        }
+        let mut i = self.pos + 1;
+        let mut depth = 1i32;
+        while i < self.tokens.len() && depth > 0 {
+            match &self.tokens[i].kind {
+                TokenKind::Lt => depth += 1,
+                TokenKind::Gt => depth -= 1,
+                TokenKind::Ge | TokenKind::Le => return false,
+                TokenKind::EqEq
+                | TokenKind::NotEq
+                | TokenKind::AndAnd
+                | TokenKind::OrOr
+                | TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::Percent
+                | TokenKind::Assign
+                | TokenKind::Eof => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            return false;
+        }
+        // `i` is one past the closing `>`.
+        matches!(
+            self.tokens.get(i).map(|t| &t.kind),
+            Some(TokenKind::LParen) | Some(TokenKind::Dot)
+        )
+    }
+
     fn peek_kind_is(&self, offset: usize, kind: &TokenKind) -> bool {
         let Some(tok) = self.tokens.get(self.pos + offset) else {
             return matches!(kind, TokenKind::Eof);
@@ -2380,6 +2438,7 @@ impl Parser {
             message: message.into(),
             span,
             severity: Severity::Error,
+            file: None,
         });
     }
 }

@@ -1,0 +1,2 @@
+roundtrip ok
+{"sku":"LL-001","name":"LLLang mug","priceCents":1499}

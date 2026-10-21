@@ -44,6 +44,8 @@ This repository defines **LLLang**, a compiled OOP language with Swift/C#-inspir
 
 Requires **LLVM 22** (`brew install llvm@22`, export `LLVM_SYS_221_PREFIX=/opt/homebrew/opt/llvm@22`).
 
-Phase 2.1 still pending: `lang fmt`, go-to-def / rename in LSP.
+Phase 2.1 done: `lang fmt`, LSP go-to-def / rename / inlays, ABI/COW/vtable polish.
+Phase 3 MVP: `lang pack` / store / `Package.lock`, Std.Json/Toon/Http/Async/Llm for examples.
+Phase 4 MVP: typed LSP completion + LL2005 code actions, file registry publish/search, `lang new` / `bench`, tree-sitter stub.
 
 When unsure, prefer updating the **specification** over inventing runtime behavior.

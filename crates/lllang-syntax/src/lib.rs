@@ -2,6 +2,7 @@
 
 mod ast;
 mod diagnostic;
+mod fmt;
 mod lexer;
 mod parser;
 mod span;
@@ -9,6 +10,7 @@ mod token;
 
 pub use ast::*;
 pub use diagnostic::{codes as diagnostic_codes, Diagnostic, Severity, SyntaxError};
+pub use fmt::format_source;
 pub use lexer::{lex, Lexer};
 pub use span::{Loc, SourceMap, Span};
 pub use token::{Token, TokenKind};

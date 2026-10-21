@@ -37,6 +37,10 @@ public async func main() async throws(LlmError) {
 - Prefer `Codable` return types for structured tool results.
 - Keep secrets out of `.mll`; use env/config via `Std.Env`.
 
+## Deterministic CI
+
+Set `LANG_LLM_MOCK=1` (or any non-empty value) so `runAgent` returns a fixed summary without calling Ollama. Live path: local `OllamaProvider` over HTTP when mock is unset.
+
 ## CLI (planned)
 
 ```bash

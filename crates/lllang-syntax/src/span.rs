@@ -62,6 +62,15 @@ impl SourceMap {
         }
     }
 
+    /// Byte offset of the start of a 1-based line.
+    pub fn line_start(&self, line: u32) -> u32 {
+        let idx = (line as usize).saturating_sub(1);
+        self.line_starts
+            .get(idx)
+            .copied()
+            .unwrap_or_else(|| *self.line_starts.last().unwrap_or(&0))
+    }
+
     pub fn span_locs(&self, span: Span) -> (Loc, Loc) {
         (self.loc(span.start), self.loc(span.end.saturating_sub(1).max(span.start)))
     }

@@ -6,63 +6,78 @@
 import Std.Testing
 ```
 
-## Tests
+## Suites and tests
 
 ```ll
-@Test
-func addsNumbers() {
-    expect(2 + 2 == 4)
-}
+@suite("Math")
+public struct MathTests {
+    @test("adds")
+    public func testAdd() {
+        @equal(2 + 2, 4)
+    }
 
-@Test(.tags(["integration"]))
-func readsConfig() throws(ConfigError) {
-    let cfg = try File.readText(Path("fixture.toml"))
-    expect(cfg.contains("version"))
-}
-```
-
-## Expectations
-
-```ll
-public func expect(_ condition: Bool, _ message: String = "expectation failed")
-public func expectEqual<T: Equatable>(_ lhs: T, _ rhs: T)
-public func expectThrows<E: Error>(_ errorType: E.Type, _ body: () throws(E) -> Void)
-```
-
-## Async tests
-
-```ll
-@Test
-func fetchesHealth() async throws(HttpError) {
-    let client = HttpClient(base: URL("https://example.com"))
-    let resp = try await client.get("/health")
-    expect(resp.status == 200)
-}
-```
-
-## Fixtures
-
-```ll
-public struct TestFixture<Context> {
-    public init(_ setup: () throws(E) -> Context, _ teardown: (Context) -> Void = { _ in })
-    public func with<R>(_ body: (Context) throws(E) -> R) throws(E) -> R
-}
-```
-
-## Benchmark hook
-
-Micro-benchmarks in tests (not a replacement for `lang bench`):
-
-```ll
-@Test(.benchmark)
-func hashPerformance() {
-    measure(iterations: 10_000) {
-        Hasher().combine("payload")
+    @theory("sum")
+    @values(1, 2)
+    @values(3, 4)
+    public func testSum(a: Int, b: Int) {
+        @expect(a + b == a + b)
     }
 }
+
+@suite("Ordered", parallel: false)
+public struct OrderedTests {
+    @test
+    public func stepOne() { @true(true) }
+}
 ```
+
+- Suites and tests run **in parallel by default**. Use `parallel: false` on `@suite` for ordered cases.
+- `@test` / `@theory` titles are optional (method name is used).
+- Free-function `@Test` / `@test` is still supported for single cases.
+
+## Assertion macros
+
+Statement-prefix macros desugar to runtime checks (failure messages include the macro name):
+
+| Macro | Meaning |
+|-------|---------|
+| `@expect(cond)` | `cond` is true |
+| `@true(x)` / `@false(x)` | Boolean equality |
+| `@equal(a, b)` / `@notEqual(a, b)` | `Equatable` / inequality |
+| `@empty(x)` / `@notEmpty(x)` | `isEmpty` (alias `@noempty`) |
+| `@gt` / `@gte` / `@lt` / `@lte` | Numeric comparisons |
+| `@contains(hay, needle)` | String contains |
+| `@approx(a, b)` | Double within default epsilon |
+
+Free functions `expect(...)`, `expectEqual(...)`, etc. remain valid.
+
+`@throws(E) { ... }` is documented for a later pass.
+
+## Theories
+
+```ll
+@theory("pairs")
+@values(10, 4)
+@values(5, 2)
+public func testSum(a: Int, b: Int) {
+    @equal(a + b, a + b)
+}
+```
+
+Each `@values` row becomes a concrete parallel test case.
+
+## CLI
+
+```bash
+lang test                 # parallel by default
+lang test add             # filter
+lang test --jobs 4
+lang test --sequential
+```
+
+Compile artifacts cache under `.lang/cache/test/<hash>/`.
 
 ## See also
 
-- [FS](fs.md) — temporary files in tests
-- [Json](json.md) — round-trip fixtures
+- [Toolchain testing](../toolchain/testing.md)
+- [Attributes](../language/14-attributes.md)

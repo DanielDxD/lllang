@@ -5,7 +5,7 @@ description: Use the lang CLI — check, build, run, new templates, Package.ll /
 
 # LLLang CLI
 
-## Phase 2 (available today)
+## Available today (Phase 2–4)
 
 Requires **LLVM 22**:
 
@@ -17,36 +17,36 @@ export SDKROOT="$(xcrun --show-sdk-path)"   # macOS linking
 
 ```bash
 cargo build -p lang
-./target/debug/lang check <path>              # parse + sema
+./target/debug/lang check <path>
 ./target/debug/lang build --manifest Package.ll
 ./target/debug/lang run --manifest Package.ll
-./target/debug/lang run --solution Solution.ll --project Cli
-./target/debug/lang lsp                       # stdio; syntax + sema diagnostics
+./target/debug/lang fmt [--check] [PATH...]
+./target/debug/lang new <template> -n NAME [-o DIR]   # console lib agent mcp bench …
+./target/debug/lang new --list
+./target/debug/lang pack / publish [--registry DIR] / restore / add / remove / search
+./target/debug/lang test [FILTER] [--jobs N] [--sequential]
+./target/debug/lang bench
+./target/debug/lang sdk list|install|use
+./target/debug/lang lsp   # + completion, LL2005 code actions
 ./target/debug/lang --version
 ```
 
-Flags: `--release`, `--emit-llvm`, `--emit-mir`, `--project`, `--all`.
+Flags: `--release`, `--target`, `--emit-llvm`, `--emit-mir`, `--project`, `--all`, `--color auto|always|never`.
 
-Known-good examples: `examples/hello`, `errors`, `shapes-oop`, `shop-solution`.
+`LANG_REGISTRY` / `--registry` selects a file-backed registry root (default `~/.lang/registry`).
+
+Examples: `hello`, `errors`, `shapes-oop`, `shop-solution`, `json-toon`, `async-http`, `llm-agent` (`LANG_LLM_MOCK`), `mcp-echo`, `unit-tests`.
+
+`lang test` discovers `@suite` / `@test` / `@theory`, desugars assertion macros (`@expect`, `@equal`, `@empty`/`@notEmpty`, `@gte`/`@lte`, …), compiles a cached harness under `.lang/cache/test/`, and runs cases in parallel by default.
 
 ## Still planned / stubs
 
 ```bash
-lang new <template> -n NAME
-lang fmt
-lang test / add / publish / llm …
+llm gen / solution add …
 ```
 
 ## Manifest
 
-- Every package has **`Package.ll`** at its root (SwiftPM-style DSL via `Std.PackageDescription`).
-- Executables declare `.executable` products and `.executableTarget` entries.
-- Monorepos add root **`Solution.ll`** (`Std.SolutionDescription`) listing member packages.
-- Lockfile: **`Package.lock`** after `lang add`; do not hand-edit.
+- **`Package.ll`** / monorepo **`Solution.ll`**; lockfile **`Package.lock`**.
 
-## Conventions for agents
-
-- Point contributors to `examples/` for copy-paste layouts; see `examples/shop-solution/` for solutions.
-- Global options: `--manifest PATH` for `Package.ll`; `--solution PATH` for `Solution.ll`.
-
-Reference: [docs/toolchain/cli-reference.md](../../docs/toolchain/cli-reference.md), [docs/getting-started/installation.md](../../docs/getting-started/installation.md).
+Reference: [docs/toolchain/cli-reference.md](../../docs/toolchain/cli-reference.md).

@@ -7,11 +7,12 @@ members = [
     "crates/lllang-mir",
     "crates/lllang-llvm",
     "crates/lllang-lsp",
+    "crates/lllang-pack",
     "crates/lang",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/lllang-lang/llang"
@@ -24,6 +25,7 @@ lllang-sema = { path = "crates/lllang-sema" }
 lllang-mir = { path = "crates/lllang-mir" }
 lllang-llvm = { path = "crates/lllang-llvm" }
 lllang-lsp = { path = "crates/lllang-lsp" }
+lllang-pack = { path = "crates/lllang-pack" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +34,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tower-lsp = "0.20"
 dashmap = "6"
-inkwell = { version = "0.10", default-features = false, features = ["llvm22-1"] }
+inkwell = { version = "0.10", default-features = false, features = [
+    "llvm22-1",
+] }
 cc = "1"
 indexmap = "2"

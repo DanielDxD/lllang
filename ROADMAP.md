@@ -18,26 +18,26 @@
 - [x] `lang check` with sema; `lang build` / `lang run` for native binaries
 - [x] Examples: `hello`, `errors`, `shapes-oop`, `shop-solution` (path deps / `Solution.ll`)
 
-### Phase 2.1 — next tooling pass
+### Phase 2.1 — tooling pass
 
-- [ ] Formatter (`lang fmt`)
-- [ ] Fuller LSP (go-to-def, rename, inlay hints) on top of sema
-- [ ] Richer throwing ABI / COW collections / class vtables polish
+- [x] Formatter (`lang fmt`)
+- [x] Fuller LSP (go-to-def, rename, inlay hints) on top of sema
+- [x] Richer throwing ABI / COW collections / class vtables polish
 
 ## Phase 3 — Stdlib runtime & packages
 
-- [ ] Implement `Std.*` modules (Json, Toon, Async, Llm, …)
-- [ ] Global package store + resolver + `Package.lock`
-- [ ] `.bll` packing (`lang pack`) and registry protocol
-- [ ] Cross-target builds
+- [x] Implement `Std.*` modules (Json, Toon, Async, Llm, …) — MVP for examples
+- [x] Global package store + resolver + `Package.lock`
+- [x] `.bll` packing (`lang pack`) and registry protocol (local store / search)
+- [x] Cross-target builds (host + `--target` / `lang sdk` MVP)
 
 ## Phase 4 — DX polish & ecosystem
 
-- [ ] Full LSP (type-aware completion, code actions)
-- [ ] Tree-sitter grammar / JetBrains (optional)
-- [ ] Official registry hosting
-- [ ] MCP templates and agent workflows end-to-end
-- [ ] Benchmarks and performance guides
+- [x] Full LSP (type-aware completion, code actions) — MVP: members after `.`, LL2005 `try` quick-fix
+- [x] Tree-sitter grammar stub (`editors/tree-sitter-lllang`; JetBrains still optional later)
+- [x] Registry client + file-backed mock (`lang publish` / `search`, `LANG_REGISTRY`; no public host yet)
+- [x] MCP / agent templates (`lang new`) and `examples/mcp-echo`
+- [x] Benchmarks MVP (`lang bench` + `docs/toolchain/benchmarks.md`)
 
 ## Non-goals
 

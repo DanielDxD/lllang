@@ -1,13 +1,16 @@
 //! Document analysis helpers for LSP features.
 
+use lllang_sema::SemaResult;
 use lllang_syntax::{
     Access, ClassDecl, Decl, EnumDecl, File, FuncDecl, MemberDecl, ParseResult, ProtocolDecl,
     SourceMap, Span, StructDecl, Severity, Diagnostic, Pattern, LetDecl, VarDecl,
 };
 use tower_lsp::lsp_types::{
     Diagnostic as LspDiagnostic, DiagnosticSeverity, DocumentSymbol, FoldingRange,
-    FoldingRangeKind, Position, Range, SelectionRange, SymbolKind, Url,
+    FoldingRangeKind, InlayHint, InlayHintLabel, Location, Position, Range, SelectionRange,
+    SymbolKind, TextEdit, Url, WorkspaceEdit,
 };
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct AnalyzedDocument {
@@ -16,17 +19,26 @@ pub struct AnalyzedDocument {
     pub source: String,
     pub map: SourceMap,
     pub parsed: ParseResult,
+    pub sema: Option<SemaResult>,
 }
 
 impl AnalyzedDocument {
     pub fn new(uri: Url, source: String) -> Self {
         let map = SourceMap::new(&source);
         let parsed = lllang_syntax::parse(&source);
+        let path = uri.path().to_string();
+        let name = path.rsplit('/').next().unwrap_or("");
+        let sema = if name != "Package.ll" && name != "Solution.ll" {
+            Some(lllang_sema::analyze(&[(path, source.clone())]))
+        } else {
+            None
+        };
         Self {
             uri,
             source,
             map,
             parsed,
+            sema,
         }
     }
 
@@ -37,16 +49,102 @@ impl AnalyzedDocument {
             .iter()
             .map(|d| diagnostic_to_lsp(d, &self.map))
             .collect();
-        // Phase 2: also run sema (skip manifests).
-        let path = self.uri.path().to_string();
-        let name = path.rsplit('/').next().unwrap_or("");
-        if name != "Package.ll" && name != "Solution.ll" {
-            let sema = lllang_sema::analyze(&[(path, self.source.clone())]);
+        if let Some(sema) = &self.sema {
             for d in &sema.diagnostics {
                 out.push(diagnostic_to_lsp(d, &self.map));
             }
         }
         out
+    }
+
+    pub fn goto_definition(&self, position: Position) -> Option<Location> {
+        let sema = self.sema.as_ref()?;
+        let offset = position_to_offset(&self.source, position);
+        let path = self.uri.path();
+        let def = lllang_sema::resolve_at(sema, path, offset)?;
+        let uri = if def.file == path {
+            self.uri.clone()
+        } else {
+            Url::from_file_path(&def.file).ok()?
+        };
+        Some(Location {
+            uri,
+            range: span_to_range(def.def_span, &self.map),
+        })
+    }
+
+    pub fn find_references(&self, position: Position) -> Vec<Location> {
+        let Some(sema) = &self.sema else {
+            return vec![];
+        };
+        let offset = position_to_offset(&self.source, position);
+        let path = self.uri.path();
+        let Some(def) = lllang_sema::resolve_at(sema, path, offset) else {
+            return vec![];
+        };
+        let mut locs = Vec::new();
+        for (file, span) in sema.index.all_spans_for(def.id) {
+            let uri = if file == path {
+                self.uri.clone()
+            } else {
+                match Url::from_file_path(&file) {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                }
+            };
+            locs.push(Location {
+                uri,
+                range: span_to_range(span, &self.map),
+            });
+        }
+        locs
+    }
+
+    pub fn rename(&self, position: Position, new_name: String) -> Option<WorkspaceEdit> {
+        let sema = self.sema.as_ref()?;
+        let offset = position_to_offset(&self.source, position);
+        let path = self.uri.path();
+        let def = lllang_sema::resolve_at(sema, path, offset)?;
+        let edits = lllang_sema::rename_edits(sema, def.id, &new_name);
+        let mut map: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        for e in edits {
+            let uri = if e.file == path {
+                self.uri.clone()
+            } else {
+                Url::from_file_path(&e.file).ok()?
+            };
+            map.entry(uri).or_default().push(TextEdit {
+                range: span_to_range(e.span, &self.map),
+                new_text: e.new_text,
+            });
+        }
+        Some(WorkspaceEdit {
+            changes: Some(map),
+            ..Default::default()
+        })
+    }
+
+    pub fn inlay_hints(&self) -> Vec<InlayHint> {
+        let Some(sema) = &self.sema else {
+            return vec![];
+        };
+        let path = self.uri.path();
+        lllang_sema::inlay_hints_for(sema, path)
+            .into_iter()
+            .map(|h| {
+                let pos = offset_to_position(&self.source, h.after.end as usize);
+                InlayHint {
+                    position: pos,
+                    label: InlayHintLabel::String(h.label.clone()),
+                    kind: None,
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: Some(false),
+                    padding_right: Some(true),
+                    data: None,
+                }
+            })
+            .collect()
     }
 
     pub fn document_symbols(&self) -> Vec<DocumentSymbol> {
@@ -80,6 +178,12 @@ impl AnalyzedDocument {
 
     pub fn hover_text(&self, position: Position) -> Option<String> {
         let offset = position_to_offset(&self.source, position);
+        if let Some(sema) = &self.sema {
+            if let Some(def) = lllang_sema::resolve_at(sema, self.uri.path(), offset) {
+                let ty = def.ty.as_deref().unwrap_or("?");
+                return Some(format!("**{}** `{}`: `{}`", format!("{:?}", def.kind).to_lowercase(), def.name, ty));
+            }
+        }
         let word = word_at(&self.source, offset)?;
         if is_keyword(&word) {
             return Some(format!("**keyword** `{word}`"));
@@ -90,16 +194,85 @@ impl AnalyzedDocument {
         Some(format!("`{word}`"))
     }
 
-    pub fn completions(&self) -> Vec<(String, String)> {
-        let mut items: Vec<(String, String)> = KEYWORDS
+    pub fn completions(
+        &self,
+        position: Position,
+    ) -> Vec<(String, String, tower_lsp::lsp_types::CompletionItemKind)> {
+        use tower_lsp::lsp_types::CompletionItemKind;
+        let offset = position_to_offset(&self.source, position);
+        if let Some(sema) = &self.sema {
+            let items = lllang_sema::completions_at(sema, self.uri.path(), &self.source, offset);
+            if !items.is_empty() {
+                return items
+                    .into_iter()
+                    .map(|c| {
+                        let kind = match c.kind {
+                            lllang_sema::CompletionKind::Function => CompletionItemKind::FUNCTION,
+                            lllang_sema::CompletionKind::Method => CompletionItemKind::METHOD,
+                            lllang_sema::CompletionKind::Type => CompletionItemKind::CLASS,
+                            lllang_sema::CompletionKind::Field => CompletionItemKind::FIELD,
+                            lllang_sema::CompletionKind::Property => CompletionItemKind::PROPERTY,
+                            lllang_sema::CompletionKind::Variable => CompletionItemKind::VARIABLE,
+                            lllang_sema::CompletionKind::Keyword => CompletionItemKind::KEYWORD,
+                        };
+                        (c.label, c.detail, kind)
+                    })
+                    .collect();
+            }
+        }
+        let mut items: Vec<(String, String, CompletionItemKind)> = KEYWORDS
             .iter()
-            .map(|k| ((*k).to_string(), "keyword".to_string()))
+            .map(|k| ((*k).to_string(), "keyword".to_string(), CompletionItemKind::KEYWORD))
             .collect();
-        collect_names(&self.parsed.file, &mut items);
+        let mut names = Vec::new();
+        collect_names(&self.parsed.file, &mut names);
+        for (n, d) in names {
+            items.push((n, d, CompletionItemKind::VARIABLE));
+        }
         items.sort_by(|a, b| a.0.cmp(&b.0));
         items.dedup_by(|a, b| a.0 == b.0);
         items
     }
+
+    /// Quick fixes for known diagnostic codes (Phase 4 MVP: LL2005 insert `try `).
+    pub fn code_actions(&self, range: Range) -> Vec<(String, TextEdit)> {
+        let mut out = Vec::new();
+        let Some(sema) = &self.sema else {
+            return out;
+        };
+        for d in &sema.diagnostics {
+            if d.code != "LL2005" {
+                continue;
+            }
+            let dr = span_to_range(d.span, &self.map);
+            if !ranges_overlap(range, dr) && range != dr {
+                // Also accept if cursor is inside diagnostic range
+                if !range_contains(dr, range.start) {
+                    continue;
+                }
+            }
+            out.push((
+                "Insert `try`".into(),
+                TextEdit {
+                    range: Range {
+                        start: dr.start,
+                        end: dr.start,
+                    },
+                    new_text: "try ".into(),
+                },
+            ));
+        }
+        out
+    }
+}
+
+fn ranges_overlap(a: Range, b: Range) -> bool {
+    range_contains(a, b.start) || range_contains(b, a.start)
+}
+
+fn range_contains(r: Range, p: Position) -> bool {
+    (p.line > r.start.line || (p.line == r.start.line && p.character >= r.start.character))
+        && (p.line < r.end.line || (p.line == r.end.line && p.character <= r.end.character))
 }
 
 fn diagnostic_to_lsp(d: &Diagnostic, map: &SourceMap) -> LspDiagnostic {
@@ -148,6 +321,26 @@ pub fn position_to_offset(source: &str, pos: Position) -> u32 {
         }
     }
     source.len() as u32
+}
+
+pub fn offset_to_position(source: &str, offset: usize) -> Position {
+    let mut line = 0u32;
+    let mut col = 0u32;
+    for (i, ch) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    Position {
+        line,
+        character: col,
+    }
 }
 
 fn word_at(source: &str, offset: u32) -> Option<String> {

@@ -12,6 +12,10 @@ public async func fetchHealth() throws(HttpError) -> Health {
 }
 
 public async func main() {
+    if 1 + 1 == 3 {
+        print("Resultado correto")
+    }
+    
     let health = await fetchHealth() catch e => Health(status: "offline")
     print("health=\(health.status)")
 }

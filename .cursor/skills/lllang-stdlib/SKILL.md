@@ -9,19 +9,19 @@ description: Use LLLang standard library modules (Std.Json, Std.Http, Std.IO, St
 
 - **`Std.Core`** is implicit (Optional, Result, Error, Equatable, etc.).
 - Import by module: `import Std.Json`, `import Std.Http`, `import Std.IO`.
-- Stdlib ships as prebuilt `.bll` + `.sbl`; pin via `Package.lock`.
+- Phase 3 MVP: Json/Toon/Http/Async/Llm run via runtime helpers + prelude; fuller surfaces stay documented contracts.
 
 ## Common modules
 
 | Module | Use |
 |--------|-----|
 | `Std.IO` | `print`, readers/writers |
-| `Std.Json` / `Std.Toon` | Serialization |
-| `Std.Http` | `Http.get`, clients, server (Phase 3 runtime) |
-| `Std.Async` | Tasks, groups, channels |
-| `Std.Llm` | ChatModel, agents, tools |
-| `Std.Log` | Structured logging |
-| `Std.Testing` | `@Test`, expectations |
+| `Std.Json` / `Std.Toon` | `JSON.encode` / `decode`, `TOON.encode` / `decode` (MVP) |
+| `Std.Http` | `Http.get(url) async throws(HttpError) -> String` (MVP) |
+| `Std.Async` | `async`/`await` cooperative MVP |
+| `Std.Llm` | `runAgent`, tools, `OllamaProvider`, mock via `LANG_LLM_MOCK` |
+| `Std.Log` | Structured logging (documented) |
+| `Std.Testing` | `@suite` / `@test` / `@theory` / `@values`; macros `@expect`, `@equal`, `@empty`/`@notEmpty`, `@gte`/`@lte`, …; `lang test` |
 
 ## Async HTTP pattern
 
@@ -41,4 +41,4 @@ public async func fetch() throws(HttpError) -> Model {
 - Blocking I/O stays in sync modules; async modules suspend tasks.
 - Value types for data; classes for shared identity and handles.
 
-Full index: [docs/stdlib/overview.md](../../docs/stdlib/overview.md). API contracts may be *planned* until Phase 3 runtime — match documented signatures in examples.
+Full index: [docs/stdlib/overview.md](../../docs/stdlib/overview.md). Match signatures in `examples/json-toon`, `async-http`, and `llm-agent`.

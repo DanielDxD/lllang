@@ -93,9 +93,33 @@ impl Ty {
             (Ty::Double, Ty::Float) => true,
             (Ty::Float, Ty::Double) => true,
             (Ty::Named(a), Ty::Named(b)) if a == b => true,
+            (Ty::Named(n), _) if n == "Any" => true,
+            // Allow Nil placeholder for missing labeled args to soft-fail.
+            (_, Ty::Error) => true,
             (Ty::Struct(a), Ty::Struct(b)) if a == b => true,
             (Ty::Class(a), Ty::Class(b)) if a == b => true,
             (Ty::Enum(a), Ty::Enum(b)) if a == b => true,
+            // Codable / Encodable / Decodable accept any concrete struct/class.
+            (Ty::Named(n), Ty::Struct(_) | Ty::Class(_))
+                if n == "Encodable" || n == "Decodable" || n == "Codable" =>
+            {
+                true
+            }
+            (Ty::Protocol(n), Ty::Struct(_) | Ty::Class(_))
+                if n == "Encodable" || n == "Decodable" || n == "Codable" || n == "Equatable" =>
+            {
+                true
+            }
+            // Provider protocols / aliases.
+            (Ty::Named(n) | Ty::Struct(n), Ty::Struct(m) | Ty::Class(m) | Ty::Named(m))
+                if n == "ChatModel"
+                    && (m == "OllamaProvider"
+                        || m == "OpenAIProvider"
+                        || m == "AnthropicProvider"
+                        || m == "ChatModel") =>
+            {
+                true
+            }
             _ => false,
         }
     }

@@ -1,120 +1,66 @@
 # Testing
 
-LLLang uses a unified **`lang test`** runner integrated with the build pipeline. Tests compile as part of the package graph and execute as native binaries (Phase 2+). Phase 1 projects may still author tests; they are not executed until codegen exists.
+LLLang uses a unified **`lang test`** runner: discover suites, compile a cached harness, execute cases **in parallel by default**.
 
 ## Layout
 
 ```text
 my-lib/
-  src/
-    math.ll
-  tests/
+  Sources/...
+  Tests/
     math_test.ll
 ```
 
-Alternative: co-located tests in `src/` with `@Test` attribute (discouraged for large libs).
-
-Dev dependencies (`[dependencies.dev]`) supply helpers such as `test.utils` without polluting consumers.
+`testTarget` paths in `Package.ll` are scanned. Files with `@suite` / `@test` / `@Test` are included.
 
 ## Defining tests
 
-### Attribute style
+### Suite style (preferred)
 
 ```ll
 namespace Acme.Math.Tests
 
-import Acme.Math
-import Std.Test
+import Std.Testing
 
-@Test
-func vec2_adds_components() {
-    let a = Vec2(1, 2)
-    let b = Vec2(3, 4)
-    Test.expectEqual(a.adding(b), Vec2(4, 6))
+@suite("Math")
+public struct MathTests {
+    @test("distance non-negative")
+    public func distanceOk() {
+        @gte(1, 0)
+    }
 }
 ```
 
-### Suite style (planned)
+### Free function
 
 ```ll
-@TestSuite("Math")
-struct MathTests {
-    @Test
-    func distance_is_non_negative() { ... }
+@Test
+func vec2_adds() {
+    @equal(1 + 1, 2)
 }
 ```
 
-## Running tests
+See [Std.Testing](../stdlib/testing.md) for assertion macros (`@expect`, `@empty`, `@gte`, …) and theories.
+
+## Running
 
 ```bash
-lang test                    # all tests in package
+lang test                    # all tests, parallel
 lang test vec2               # filter by name substring
-lang test --parallel 4
-lang test --coverage         # llvm-cov integration (Phase 3+)
+lang test --jobs 8
+lang test --sequential       # one worker (still respects suite parallel: false)
 ```
 
-In workspaces:
+Cache: `.lang/cache/test/<content-hash>/` (skip relink when sources unchanged).
 
-```bash
-lang test --workspace
-lang test -p acme.math
-```
-
-## Assertions
-
-Via `Std.Test` (documented in stdlib):
-
-| API | Behavior |
-|-----|----------|
-| `Test.expect(condition)` | Fails if false |
-| `Test.expectEqual(a, b)` | Uses `Equatable` |
-| `Test.expectThrows(E) { ... }` | Typed error expectation |
-| `Test.snap("name", value)` | TOON/JSON snapshot files in `tests/snapshots/` |
-
-Snapshots are reviewed in PRs; CI fails on drift unless `--accept` locally.
-
-## Integration tests
-
-Place under `tests/integration/` with longer timeouts:
-
-```toml
-[build]
-test-timeout-ms = 120_000
-```
-
-Mark with `@Test(integration: true)` when supported.
-
-## CI example
+## CI
 
 ```yaml
 - run: lang restore
-- run: lang test --workspace -- --parallel 2
+- run: lang test
 ```
-
-Requires lockfile committed and store cache keyed by `Package.lock` hashes.
-
-## Relationship to `check`
-
-Phase 1:
-
-```bash
-lang check tests/
-```
-
-Ensures test sources parse. No execution.
-
-## Benchmarks vs tests
-
-| | `lang test` | `lang bench` |
-|---|-------------|--------------|
-| Location | `tests/` | `benches/` |
-| Attribute | `@Test` | `@Bench` |
-| Failure | Assertion | Regression vs baseline |
-
-See [CLI `bench`](cli-reference.md).
 
 ## See also
 
-- [Templates: test](templates.md)
-- [Build pipeline](build-pipeline.md)
-- [Std.Test](../stdlib/overview.md) (API surface)
+- [Benchmarks](benchmarks.md) — `lang bench`
+- [CLI reference](cli-reference.md)

@@ -109,6 +109,12 @@ pub enum Value {
 pub enum Callee {
     Func(String),
     Builtin(String),
+    /// Dynamic dispatch: `args[0]` is `self`; call `vtable[slot]`.
+    Virtual {
+        class: String,
+        method: String,
+        slot: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +216,8 @@ pub enum Inst {
     SetErrOut { val: Value },
     /// Load whether err_out is non-null after a throwing call.
     LoadErrFlag { dst: Local },
+    /// Load the error payload pointer from `__err_out` into `dst` (pointer / boxed).
+    LoadErrValue { dst: Local },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -247,6 +255,7 @@ pub enum TypeDef {
         name: String,
         fields: Vec<(String, MirTy)>,
         parent: Option<String>,
+        virtual_methods: Vec<String>,
     },
     Enum {
         name: String,

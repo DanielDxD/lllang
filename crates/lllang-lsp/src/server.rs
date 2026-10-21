@@ -1,6 +1,6 @@
 //! tower-lsp backend for LLLang.
 
-use crate::analysis::AnalyzedDocument;
+use crate::analysis::{offset_to_position, AnalyzedDocument};
 use crate::semantic::{legend_token_types, semantic_tokens};
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -61,6 +61,12 @@ impl LanguageServer for Backend {
                         },
                     ),
                 ),
+                document_formatting_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 ..Default::default()
             },
         })
@@ -68,8 +74,70 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         self.client
-            .log_message(MessageType::INFO, "LLLang LSP ready (phase 1 syntax)")
+            .log_message(MessageType::INFO, "LLLang LSP ready (phase 4 MVP)")
             .await;
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let Some(doc) = self.docs.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let Ok(formatted) = lllang_syntax::format_source(&doc.source) else {
+            return Ok(None);
+        };
+        if formatted == doc.source {
+            return Ok(Some(vec![]));
+        }
+        let end = offset_to_position(&doc.source, doc.source.len());
+        Ok(Some(vec![TextEdit {
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end,
+            },
+            new_text: formatted,
+        }]))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let Some(doc) = self.docs.get(&params.text_document_position_params.text_document.uri)
+        else {
+            return Ok(None);
+        };
+        Ok(doc
+            .goto_definition(params.text_document_position_params.position)
+            .map(GotoDefinitionResponse::Scalar))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let Some(doc) = self.docs.get(&params.text_document_position.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            doc.find_references(params.text_document_position.position),
+        ))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let Some(doc) = self.docs.get(&params.text_document_position.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(doc.rename(
+            params.text_document_position.position,
+            params.new_name,
+        ))
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let Some(doc) = self.docs.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        Ok(Some(doc.inlay_hints()))
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -142,16 +210,42 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let items = doc
-            .completions()
+            .completions(params.text_document_position.position)
             .into_iter()
-            .map(|(label, detail)| CompletionItem {
+            .map(|(label, detail, kind)| CompletionItem {
                 label,
                 detail: Some(detail),
-                kind: Some(CompletionItemKind::KEYWORD),
+                kind: Some(kind),
                 ..Default::default()
             })
             .collect();
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let Some(doc) = self.docs.get(&params.text_document.uri) else {
+            return Ok(None);
+        };
+        let actions = doc
+            .code_actions(params.range)
+            .into_iter()
+            .map(|(title, edit)| {
+                CodeActionOrCommand::CodeAction(CodeAction {
+                    title,
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some({
+                            let mut m = std::collections::HashMap::new();
+                            m.insert(params.text_document.uri.clone(), vec![edit]);
+                            m
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        Ok(Some(actions))
     }
 
     async fn semantic_tokens_full(

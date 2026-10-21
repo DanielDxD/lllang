@@ -525,6 +525,7 @@ impl<'a> Lexer<'a> {
             message: message.into(),
             span,
             severity: Severity::Error,
+            file: None,
         });
     }
 }

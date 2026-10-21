@@ -59,14 +59,23 @@ See [Codable](17-codable.md) for encoding rules.
 ## Testing and diagnostics
 
 ```ll
+@suite("Cart")
+public struct CartTests {
+    @test("adds item")
+    public func addsItem() {
+        @expect(true)
+        @gte(1, 0)
+    }
+}
+
 @Test
-func addsItem() { ... }
+func legacyStyle() { @equal(1, 1) }
 
 @Diagnostic("unused", ignore: true)
 private func legacyHook() { }
 ```
 
-Test discovery integrates with `lang test`.
+Discovery integrates with `lang test`. Assertion macros: `@expect`, `@true`/`@false`, `@equal`/`@notEqual`, `@empty`/`@notEmpty` (`@noempty`), `@gt`/`@gte`/`@lt`/`@lte`, `@contains`, `@approx`. See [Std.Testing](../stdlib/testing.md).
 
 ## LLM and tooling
 

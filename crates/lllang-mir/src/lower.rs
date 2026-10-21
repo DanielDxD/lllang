@@ -34,8 +34,15 @@ pub fn emit_mir(program: &Program) -> String {
                 }
                 out.push_str(" }\n");
             }
-            TypeDef::Class { name, fields, parent } => {
-                out.push_str(&format!("class {name} extends {parent:?} {{"));
+            TypeDef::Class {
+                name,
+                fields,
+                parent,
+                virtual_methods,
+            } => {
+                out.push_str(&format!(
+                    "class {name} extends {parent:?} virt={virtual_methods:?} {{"
+                ));
                 for (n, t) in fields {
                     out.push_str(&format!(" {n}: {t:?},"));
                 }
@@ -72,6 +79,7 @@ struct Lowerer<'a> {
     type_fields: IndexMap<String, Vec<(String, MirTy)>>,
     enum_cases: IndexMap<String, Vec<(String, Vec<(String, MirTy)>)>>,
     is_class: IndexMap<String, bool>,
+    virtual_slots: IndexMap<String, Vec<String>>,
 }
 
 struct FuncLower<'a> {
@@ -96,6 +104,7 @@ impl<'a> Lowerer<'a> {
         let mut type_fields = IndexMap::new();
         let mut enum_cases = IndexMap::new();
         let mut is_class = IndexMap::new();
+        let mut virtual_slots = IndexMap::new();
         for td in &module.types {
             match td {
                 HirTypeDef::Struct { name, fields, .. } => {
@@ -105,12 +114,18 @@ impl<'a> Lowerer<'a> {
                     );
                     is_class.insert(name.clone(), false);
                 }
-                HirTypeDef::Class { name, fields, .. } => {
+                HirTypeDef::Class {
+                    name,
+                    fields,
+                    virtual_methods,
+                    ..
+                } => {
                     type_fields.insert(
                         name.clone(),
                         fields.iter().map(|(n, t)| (n.clone(), MirTy::from_hir(t))).collect(),
                     );
                     is_class.insert(name.clone(), true);
+                    virtual_slots.insert(name.clone(), virtual_methods.clone());
                 }
                 HirTypeDef::Enum { name, cases, .. } => {
                     enum_cases.insert(
@@ -135,6 +150,7 @@ impl<'a> Lowerer<'a> {
         Self {
             module,
             type_fields,
+            virtual_slots,
             enum_cases,
             is_class,
         }
@@ -166,7 +182,8 @@ impl<'a> Lowerer<'a> {
                 .iter()
                 .map(|(n, t)| (n.clone(), MirTy::from_hir(t))),
         );
-        if f.throws.is_some() {
+        // Entry `ll_main` is called from C without an error slot; uncaught throws trap.
+        if f.throws.is_some() && name != "ll_main" {
             params.push(("__err_out".into(), MirTy::Named("__err_out".into())));
         }
 
@@ -258,10 +275,17 @@ fn map_type_def(td: &HirTypeDef) -> TypeDef {
             name: name.clone(),
             fields: fields.iter().map(|(n, t)| (n.clone(), MirTy::from_hir(t))).collect(),
         },
-        HirTypeDef::Class { name, fields, parent, .. } => TypeDef::Class {
+        HirTypeDef::Class {
+            name,
+            fields,
+            parent,
+            virtual_methods,
+            ..
+        } => TypeDef::Class {
             name: name.clone(),
             fields: fields.iter().map(|(n, t)| (n.clone(), MirTy::from_hir(t))).collect(),
             parent: parent.clone(),
+            virtual_methods: virtual_methods.clone(),
         },
         HirTypeDef::Enum { name, cases, .. } => TypeDef::Enum {
             name: name.clone(),
@@ -366,11 +390,20 @@ impl FuncLower<'_> {
     }
 
     fn lower_body(&mut self, body: &Body, ret_ty: &MirTy) {
+        self.lower_stmts(body, ret_ty, true);
+    }
+
+    /// Nested then/else/loop bodies must not synthesize a function `return`.
+    fn lower_nested_body(&mut self, body: &Body, ret_ty: &MirTy) {
+        self.lower_stmts(body, ret_ty, false);
+    }
+
+    fn lower_stmts(&mut self, body: &Body, ret_ty: &MirTy, implicit_return: bool) {
         let stmts = &body.stmts;
         for (i, stmt) in stmts.iter().enumerate() {
             let is_last = i + 1 == stmts.len();
-            // Implicit return: trailing expression in a non-void function.
-            if is_last && *ret_ty != MirTy::Void {
+            // Implicit return: trailing expression in a non-void function (top-level body only).
+            if implicit_return && is_last && *ret_ty != MirTy::Void {
                 if let Stmt::Expr(e) = stmt {
                     let v = self.lower_expr(e, ret_ty);
                     self.finish_return(Some(v), ret_ty);
@@ -378,6 +411,9 @@ impl FuncLower<'_> {
                 }
             }
             self.lower_stmt(stmt, ret_ty);
+        }
+        if !implicit_return {
+            return;
         }
         // Initial terminator is Unreachable — treat it as "not yet set".
         if !matches!(
@@ -465,7 +501,7 @@ impl FuncLower<'_> {
                 self.switch_block(then_b);
                 self.set_term(Terminator::Jump(merge));
                 self.switch_block(else_b);
-                self.lower_body(else_body, ret_ty);
+                self.lower_nested_body(else_body, ret_ty);
                 if !matches!(
                     self.blocks[self.cur_block].term,
                     Terminator::Return(_) | Terminator::Throw(_)
@@ -485,7 +521,7 @@ impl FuncLower<'_> {
                     else_b,
                 });
                 self.switch_block(then_b);
-                self.lower_body(then_body, ret_ty);
+                self.lower_nested_body(then_body, ret_ty);
                 if !matches!(
                     self.blocks[self.cur_block].term,
                     Terminator::Return(_) | Terminator::Throw(_)
@@ -494,7 +530,7 @@ impl FuncLower<'_> {
                 }
                 self.switch_block(else_b);
                 if let Some(eb) = else_body {
-                    self.lower_body(eb, ret_ty);
+                    self.lower_nested_body(eb, ret_ty);
                 }
                 if !matches!(
                     self.blocks[self.cur_block].term,
@@ -517,7 +553,7 @@ impl FuncLower<'_> {
                     else_b: exit,
                 });
                 self.switch_block(body_b);
-                self.lower_body(body, ret_ty);
+                self.lower_nested_body(body, ret_ty);
                 if !matches!(
                     self.blocks[self.cur_block].term,
                     Terminator::Return(_) | Terminator::Throw(_)
@@ -581,13 +617,21 @@ impl FuncLower<'_> {
                 Value::Local(loc)
             }
             Expr::Local(name) | Expr::Param(name) => {
-                let (src, ty) = self
-                    .lookup(name)
-                    .unwrap_or_else(|| panic!("local `{name}` not in scope"));
-                if ty.is_refcounted() {
-                    self.emit(Inst::Retain(Value::Local(src)));
+                if let Some((src, ty)) = self.lookup(name) {
+                    if ty.is_refcounted() {
+                        self.emit(Inst::Retain(Value::Local(src)));
+                    }
+                    Value::Local(src)
+                } else {
+                    // Function reference (e.g. `packageVersion.self`) — materialize name string.
+                    let loc = self.alloc_local(MirTy::String);
+                    self.emit(Inst::StringLit {
+                        dst: loc,
+                        value: name.clone(),
+                    });
+                    self.track_refcounted(loc, &MirTy::String);
+                    Value::Local(loc)
                 }
-                Value::Local(src)
             }
             Expr::Self_ => {
                 let (src, ty) = self.lookup("self").expect("self");
@@ -751,6 +795,22 @@ impl FuncLower<'_> {
         try_kind: TryKind,
     ) -> Value {
         if let HirCallee::Builtin(id) = callee {
+            if id == "test_expect_bare" && args.len() == 1 {
+                let cond_ty = expr_mir_ty(&args[0]);
+                let cond = self.lower_expr(&args[0], &cond_ty);
+                let msg = self.alloc_local(MirTy::String);
+                self.emit(Inst::StringLit {
+                    dst: msg,
+                    value: "expect".into(),
+                });
+                self.emit(Inst::Call {
+                    dst: None,
+                    callee: Callee::Builtin("ll_test_expect".into()),
+                    args: vec![cond, Value::Local(msg)],
+                    ty: MirTy::Void,
+                });
+                return Value::Nil;
+            }
             if id == "unwrap_optional" && args.len() == 1 {
                 let opt_ty = expr_mir_ty(&args[0]);
                 let opt = self.lower_expr(&args[0], &opt_ty);
@@ -948,7 +1008,12 @@ impl FuncLower<'_> {
         self.set_term(Terminator::Jump(merge));
 
         self.switch_block(err_b);
-        let _ = binder; // binder available for future typed catch payloads
+        if !binder.is_empty() && binder != "_" {
+            let err_ty = MirTy::Named("void*".into());
+            let err_local = self.alloc_local(err_ty.clone());
+            self.emit(Inst::LoadErrValue { dst: err_local });
+            self.bind_local(binder, err_local, err_ty);
+        }
         let fb = self.lower_expr(fallback, &mty);
         let fb_loc = self.materialize_to_local(fb, &mty);
         self.emit(Inst::Store {
@@ -978,12 +1043,28 @@ impl FuncLower<'_> {
                 (Callee::Builtin(rt), None)
             }
             HirCallee::Method { receiver, name } => {
+                if name == "register" {
+                    return (Callee::Builtin("ll_noop".into()), None);
+                }
                 let rt = static_method_name(receiver, name, self);
                 (Callee::Func(rt), None)
             }
             HirCallee::Virtual { receiver, name } => {
-                let rt = static_method_name(receiver, name, self);
-                (Callee::Func(rt), None)
+                let class = receiver_type_name(receiver, self).unwrap_or_else(|| "Object".into());
+                let slot = self
+                    .lower
+                    .virtual_slots
+                    .get(&class)
+                    .and_then(|m| m.iter().position(|n| n == name))
+                    .unwrap_or(0) as u32;
+                (
+                    Callee::Virtual {
+                        class,
+                        method: name.clone(),
+                        slot,
+                    },
+                    None,
+                )
             }
         }
     }
@@ -1206,6 +1287,21 @@ fn map_builtin(id: &str) -> String {
         "int_from_string" => "ll_int_from_string".into(),
         "string_is_empty" => "ll_string_is_empty".into(),
         "double_sqrt" => "ll_double_sqrt".into(),
+        "json_decode" => "ll_json_decode".into(),
+        "json_encode" => "ll_json_encode".into(),
+        "toon_decode" => "ll_toon_decode".into(),
+        "toon_encode" => "ll_toon_encode".into(),
+        "http_get" => "ll_http_get".into(),
+        "llm_run_agent" => "ll_llm_run_agent".into(),
+        "llm_merge_context" => "ll_llm_merge_context".into(),
+        "ll_noop" => "ll_noop".into(),
+        "test_expect" => "ll_test_expect".into(),
+        "test_expect_bare" => "ll_test_expect".into(),
+        "test_expect_empty" => "ll_test_expect_empty".into(),
+        "test_expect_not_empty" => "ll_test_expect_not_empty".into(),
+        "test_contains" => "ll_test_contains".into(),
+        "test_approx" => "ll_test_approx".into(),
+        "test_job_id" => "ll_test_job_id".into(),
         other => other.to_string(),
     }
 }
@@ -1213,6 +1309,10 @@ fn map_builtin(id: &str) -> String {
 fn static_method_name(receiver: &Expr, method: &str, fl: &FuncLower<'_>) -> String {
     let type_name = receiver_static_type(receiver, fl).unwrap_or_else(|| "Unknown".into());
     format!("{type_name}_{method}")
+}
+
+fn receiver_type_name(receiver: &Expr, fl: &FuncLower<'_>) -> Option<String> {
+    receiver_static_type(receiver, fl)
 }
 
 fn receiver_static_type(expr: &Expr, fl: &FuncLower<'_>) -> Option<String> {

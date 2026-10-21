@@ -118,10 +118,10 @@ File watcher with incremental rebuild. Debounce configurable via `[build] watch-
 ## `lang test`
 
 ```bash
-lang test [FILTER] [--coverage] [--parallel N]
+lang test [FILTER] [--jobs N] [--sequential]
 ```
 
-Discovers tests in `tests/` and inline `@Test` functions. See [Testing](testing.md).
+Discovers `@suite` / `@test` / `@theory` (and free-function `@Test`) under `Tests/` and `testTarget` paths. Compiles a cached harness under `.lang/cache/test/`, runs cases in parallel by default. See [Testing](testing.md).
 
 ---
 

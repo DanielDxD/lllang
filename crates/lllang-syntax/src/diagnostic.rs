@@ -36,6 +36,8 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Span,
     pub severity: Severity,
+    /// Source path when known (multi-file analysis / CLI rendering).
+    pub file: Option<String>,
 }
 
 impl Diagnostic {
@@ -45,6 +47,7 @@ impl Diagnostic {
             message: message.into(),
             span,
             severity: Severity::Error,
+            file: None,
         }
     }
 
@@ -54,7 +57,13 @@ impl Diagnostic {
             message: message.into(),
             span,
             severity: Severity::Warning,
+            file: None,
         }
+    }
+
+    pub fn with_file(mut self, file: impl Into<String>) -> Self {
+        self.file = Some(file.into());
+        self
     }
 }
 

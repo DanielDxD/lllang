@@ -36,4 +36,6 @@ Tagged unions default to `{ "tag": "variant", ...fields }`. Use `@Codable.EnumEn
 - Set decode limits for untrusted input (`DecoderLimits` on `JSON.decode`).
 - Do not treat `.mll` or TOON blobs as authoritative types — reconcile with `.sbl`/source.
 
+MVP status: `examples/json-toon` builds and runs (`JSON.decode(String)`, TOON round-trip, `Equatable` for `==`). Streaming/SIMD scanners remain later polish.
+
 Docs: [docs/language/17-codable.md](../../docs/language/17-codable.md), [docs/formats/mll.md](../../docs/formats/mll.md). Example: [examples/json-toon](../../examples/json-toon).

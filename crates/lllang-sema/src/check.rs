@@ -4,7 +4,11 @@ use crate::hir::{
     self, BinaryOp, Body, Callee, Expr, Function, InterpPart, Module, Pattern, ProtoMethod,
     Stmt, SwitchArm, TryKind, TypeDef, UnaryOp,
 };
-use crate::prelude::{self, builtin_funcs, builtin_members, builtin_type_methods, is_known_import};
+use crate::index::{SymbolIndex, SymbolKind};
+use crate::prelude::{
+    self, builtin_funcs, builtin_members, builtin_type_methods, is_known_import,
+    prelude_error_types,
+};
 use crate::types::Ty;
 use indexmap::IndexMap;
 use lllang_syntax::{
@@ -64,30 +68,37 @@ struct PendingFunc {
     self_ty: Option<Ty>,
     /// Namespace active when the function was declared (for multi-file packages).
     namespace: String,
+    file: String,
 }
 
 pub fn analyze_sources(sources: &[(String, String)]) -> crate::SemaResult {
     let mut checker = Checker::new();
-    let mut all_decls: Vec<Decl> = Vec::new();
+    let mut all_decls: Vec<(String, Decl)> = Vec::new();
 
-    for (_path, src) in sources {
+    for (path, src) in sources {
         let result = parse(src);
-        checker
-            .diagnostics
-            .extend(result.diagnostics.iter().cloned());
-        if result
+        for mut d in result.diagnostics {
+            if d.file.is_none() {
+                d.file = Some(path.clone());
+            }
+            checker.diagnostics.push(d);
+        }
+        if checker
             .diagnostics
             .iter()
-            .any(|d| d.severity == Severity::Error)
+            .any(|d| d.severity == Severity::Error && d.file.as_deref() == Some(path.as_str()))
         {
             continue;
         }
-        all_decls.extend(result.file.decls);
+        for d in result.file.decls {
+            all_decls.push((path.clone(), d));
+        }
     }
 
-    checker.collect_decls(&all_decls);
-    checker.register_types(&all_decls);
-    checker.collect_functions(&all_decls);
+    let decls_only: Vec<Decl> = all_decls.iter().map(|(_, d)| d.clone()).collect();
+    checker.collect_decls(&decls_only);
+    checker.register_types_with_files(&all_decls);
+    checker.collect_functions_with_files(&all_decls);
     checker.check_all();
     checker.finish_module()
 }
@@ -97,12 +108,15 @@ struct Checker {
     namespace: String,
     module_name: String,
     types: IndexMap<String, TypeEntry>,
-    module_funcs: IndexMap<String, FuncSig>,
+    /// Simple name → (signature, fully-mangled name including declaring namespace).
+    module_funcs: IndexMap<String, (FuncSig, String)>,
     pending: Vec<PendingFunc>,
     unknown_imports: Vec<String>,
     hir_types: Vec<TypeDef>,
     hir_funcs: Vec<Function>,
     checked_proto_defaults: IndexMap<String, IndexMap<String, Body>>,
+    index: SymbolIndex,
+    current_file: String,
 }
 
 impl Checker {
@@ -123,6 +137,59 @@ impl Checker {
                 },
             );
         }
+        for e in prelude_error_types() {
+            types.insert(
+                e.to_string(),
+                TypeEntry {
+                    kind: TypeKind::Enum,
+                    fields: IndexMap::new(),
+                    methods: IndexMap::new(),
+                    conforms: vec!["Error".into()],
+                    parent: None,
+                    enum_cases: IndexMap::new(),
+                    protocol_methods: IndexMap::new(),
+                    virtual_methods: vec![],
+                },
+            );
+        }
+        // Namespace / stdlib stub types.
+        for n in [
+            "JSON",
+            "TOON",
+            "Http",
+            "ChatModel",
+            "ToolRegistry",
+            "LlmContext",
+            "OllamaProvider",
+            "Health",
+        ] {
+            types.insert(
+                n.to_string(),
+                TypeEntry {
+                    kind: TypeKind::Struct,
+                    fields: IndexMap::new(),
+                    methods: IndexMap::new(),
+                    conforms: vec![],
+                    parent: None,
+                    enum_cases: IndexMap::new(),
+                    protocol_methods: IndexMap::new(),
+                    virtual_methods: vec![],
+                },
+            );
+        }
+        if let Some(tr) = types.get_mut("ToolRegistry") {
+            tr.methods.insert(
+                "register".into(),
+                FuncSig {
+                    params: vec![("tool".into(), Ty::Named("Any".into()))],
+                    ret: Ty::Void,
+                    throws: None,
+                },
+            );
+        }
+        if let Some(op) = types.get_mut("OllamaProvider") {
+            op.fields.insert("model".into(), Ty::String);
+        }
         Self {
             diagnostics: Vec::new(),
             namespace: String::new(),
@@ -134,6 +201,8 @@ impl Checker {
             hir_types: Vec::new(),
             hir_funcs: Vec::new(),
             checked_proto_defaults: IndexMap::new(),
+            index: SymbolIndex::default(),
+            current_file: String::new(),
         }
     }
 
@@ -145,6 +214,7 @@ impl Checker {
                 types: self.hir_types,
             },
             diagnostics: self.diagnostics,
+            index: self.index,
         }
     }
 
@@ -172,8 +242,9 @@ impl Checker {
             .retain(|imp| !unit_namespaces.iter().any(|ns| ns == imp || ns.starts_with(&format!("{imp}."))));
     }
 
-    fn register_types(&mut self, decls: &[Decl]) {
-        for decl in decls {
+    fn register_types_with_files(&mut self, decls: &[(String, Decl)]) {
+        for (file, decl) in decls {
+            self.current_file = file.clone();
             match decl {
                 Decl::Struct(s) => self.register_struct(s),
                 Decl::Class(c) => self.register_class(c),
@@ -230,6 +301,13 @@ impl Checker {
                 virtual_methods: vec![],
             },
         );
+        self.index.define_global(
+            name.clone(),
+            &self.current_file,
+            s.span,
+            Some(&Ty::Struct(name)),
+            SymbolKind::Type,
+        );
     }
 
     fn register_class(&mut self, c: &lllang_syntax::ClassDecl) {
@@ -279,6 +357,13 @@ impl Checker {
                 virtual_methods: vec![],
             },
         );
+        self.index.define_global(
+            name.clone(),
+            &self.current_file,
+            c.span,
+            Some(&Ty::Class(name)),
+            SymbolKind::Type,
+        );
     }
 
     fn register_enum(&mut self, e: &lllang_syntax::EnumDecl) {
@@ -305,6 +390,13 @@ impl Checker {
                 protocol_methods: IndexMap::new(),
                 virtual_methods: vec![],
             },
+        );
+        self.index.define_global(
+            name.clone(),
+            &self.current_file,
+            e.span,
+            Some(&Ty::Enum(name)),
+            SymbolKind::Type,
         );
     }
 
@@ -349,11 +441,19 @@ impl Checker {
                 virtual_methods: vec![],
             },
         );
+        self.index.define_global(
+            name.clone(),
+            &self.current_file,
+            p.span,
+            Some(&Ty::Protocol(name)),
+            SymbolKind::Type,
+        );
     }
 
-    fn collect_functions(&mut self, decls: &[Decl]) {
+    fn collect_functions_with_files(&mut self, decls: &[(String, Decl)]) {
         let mut ns = String::new();
-        for decl in decls {
+        for (file, decl) in decls {
+            self.current_file = file.clone();
             match decl {
                 Decl::Namespace(n) => {
                     ns = n.path.segments.join(".");
@@ -361,24 +461,48 @@ impl Checker {
                     self.module_name = ns.clone();
                 }
                 Decl::Func(f) => {
+                    self.index.define_global(
+                        &f.name,
+                        file,
+                        f.span,
+                        None,
+                        SymbolKind::Function,
+                    );
                     self.pending.push(PendingFunc {
                         decl: f.clone(),
                         owner: None,
                         self_ty: None,
                         namespace: ns.clone(),
+                        file: file.clone(),
                     });
                 }
                 Decl::Struct(s) => {
-                    self.collect_type_funcs(&s.name, Ty::Struct(s.name.clone()), &s.members, &ns)
+                    self.collect_type_funcs(
+                        &s.name,
+                        Ty::Struct(s.name.clone()),
+                        &s.members,
+                        &ns,
+                        file,
+                    )
                 }
                 Decl::Class(c) => {
-                    self.collect_type_funcs(&c.name, Ty::Class(c.name.clone()), &c.members, &ns)
+                    self.collect_type_funcs(
+                        &c.name,
+                        Ty::Class(c.name.clone()),
+                        &c.members,
+                        &ns,
+                        file,
+                    )
                 }
                 Decl::Enum(e) => {
-                    self.collect_type_funcs(&e.name, Ty::Enum(e.name.clone()), &e.members, &ns)
+                    self.collect_type_funcs(
+                        &e.name,
+                        Ty::Enum(e.name.clone()),
+                        &e.members,
+                        &ns,
+                        file,
+                    )
                 }
-                // Protocol methods are requirements / defaults — not callable as
-                // `Drawable_label`; defaults are synthesized onto conforming types.
                 Decl::Protocol(_) => {}
                 _ => {}
             }
@@ -391,14 +515,23 @@ impl Checker {
         self_ty: Ty,
         members: &[MemberDecl],
         namespace: &str,
+        file: &str,
     ) {
         for m in members {
             if let MemberDecl::Func(f) = m {
+                self.index.define_global(
+                    &f.name,
+                    file,
+                    f.span,
+                    None,
+                    SymbolKind::Function,
+                );
                 self.pending.push(PendingFunc {
                     decl: f.clone(),
                     owner: Some(owner.to_string()),
                     self_ty: Some(self_ty.clone()),
                     namespace: namespace.to_string(),
+                    file: file.to_string(),
                 });
             }
         }
@@ -410,6 +543,34 @@ impl Checker {
         // (e.g. `main`) call them.
         let (methods, free_funcs): (Vec<_>, Vec<_>) =
             pending.into_iter().partition(|pf| pf.owner.is_some());
+        // Pre-register free function signatures so later files can reference earlier ones
+        // regardless of source path sort order (e.g. `main.ll` before `tools.ll`).
+        for pf in &free_funcs {
+            let (params, _) = self.func_params(&pf.decl, pf.self_ty.clone());
+            let ret = pf
+                .decl
+                .return_type
+                .as_ref()
+                .map(|t| self.resolve_ast_type(t))
+                .unwrap_or(Ty::Void);
+            let throws = throws_type(&pf.decl.throws);
+            let mangled = if !pf.namespace.is_empty() {
+                format!("{}.{}", pf.namespace, pf.decl.name)
+            } else {
+                pf.decl.name.clone()
+            };
+            self.module_funcs.insert(
+                pf.decl.name.clone(),
+                (
+                    FuncSig {
+                        params,
+                        ret,
+                        throws,
+                    },
+                    mangled,
+                ),
+            );
+        }
         for pf in methods {
             self.check_pending_func(pf);
         }
@@ -581,6 +742,7 @@ impl Checker {
 
     fn check_pending_func(&mut self, pf: PendingFunc) {
         let f = &pf.decl;
+        self.current_file = pf.file.clone();
         let (params, _self_ty) = self.func_params(f, pf.self_ty.clone());
         let ret = f
             .return_type
@@ -606,7 +768,7 @@ impl Checker {
         self.namespace = pf.namespace.clone();
 
         if pf.owner.is_none() {
-            self.module_funcs.insert(f.name.clone(), sig.clone());
+            self.module_funcs.insert(f.name.clone(), (sig.clone(), mangled.clone()));
         } else if let Some(owner) = &pf.owner {
             if let Some(entry) = self.types.get_mut(owner) {
                 entry.methods.insert(f.name.clone(), sig.clone());
@@ -624,6 +786,15 @@ impl Checker {
             }
         }
         for (n, t) in &params {
+            // Approximate param span from func decl (full param span unavailable here).
+            let id = self.index.define(
+                n,
+                &self.current_file,
+                f.span,
+                Some(t),
+                SymbolKind::Param,
+            );
+            let _ = id;
             scope.insert_param(n.clone(), t.clone());
         }
 
@@ -765,12 +936,46 @@ impl Checker {
         self_ty: Option<Ty>,
         throws: Option<Ty>,
     ) -> Body {
+        let ret = f
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_ast_type(t))
+            .unwrap_or(Ty::Void);
         match &f.body {
-            FuncBody::Block(b) => Body {
-                stmts: self.check_block_stmts(&b.stmts, scope, self_ty.clone(), throws.clone()),
-            },
+            FuncBody::Block(b) => {
+                let mut stmts =
+                    self.check_block_stmts(&b.stmts, scope, self_ty.clone(), throws.clone());
+                // Specialize trailing JSON/TOON decode to the function return type.
+                if let Some(Stmt::Expr(Expr::Call {
+                    callee: Callee::Builtin(bid),
+                    ty,
+                    ..
+                })) = stmts.last_mut()
+                {
+                    if (bid == "json_decode" || bid == "toon_decode")
+                        && (ty.is_error()
+                            || matches!(ty, Ty::Named(n) if n == "Decodable"))
+                    {
+                        *ty = ret;
+                    }
+                }
+                Body { stmts }
+            }
             FuncBody::Expr(e) => {
-                let expr = self.check_expr(e, scope, self_ty, throws.clone(), false);
+                let mut expr = self.check_expr(e, scope, self_ty, throws.clone(), false);
+                if let Expr::Call {
+                    callee: Callee::Builtin(ref bid),
+                    ty,
+                    ..
+                } = &mut expr
+                {
+                    if (bid == "json_decode" || bid == "toon_decode")
+                        && (ty.is_error()
+                            || matches!(ty, Ty::Named(n) if n == "Decodable"))
+                    {
+                        *ty = ret;
+                    }
+                }
                 Body {
                     stmts: vec![Stmt::Return(Some(expr))],
                 }
@@ -806,6 +1011,7 @@ impl Checker {
                 let mut result = vec![];
                 for b in &l.bindings {
                     let (name, init_expr, ann_ty) = self.binding_info(b, scope, self_ty.clone(), throws.clone());
+                    let had_ann = ann_ty.is_some();
                     let init = init_expr.unwrap_or(Expr::Nil);
                     let ty = ann_ty.unwrap_or_else(|| {
                         let inferred = self.expr_ty(&init, scope);
@@ -817,6 +1023,17 @@ impl Checker {
                     });
                     if !ty.is_error() && !ty.assignable_from(&self.expr_ty(&init, scope)) {
                         self.error_type_mismatch(&ty, &self.expr_ty(&init, scope), b.span);
+                    }
+                    self.index.define(
+                        &name,
+                        &self.current_file,
+                        b.span,
+                        Some(&ty),
+                        SymbolKind::Local,
+                    );
+                    if !had_ann && !ty.is_error() {
+                        self.index
+                            .inlay(&self.current_file, b.span, format!(": {}", ty.display()));
                     }
                     scope.insert(name.clone(), ty.clone());
                     result.push(Stmt::Let {
@@ -831,6 +1048,7 @@ impl Checker {
                 let mut result = vec![];
                 for b in &v.bindings {
                     let (name, init_expr, ann_ty) = self.binding_info(b, scope, self_ty.clone(), throws.clone());
+                    let had_ann = ann_ty.is_some();
                     let ty = ann_ty.unwrap_or_else(|| {
                         init_expr
                             .as_ref()
@@ -841,6 +1059,17 @@ impl Checker {
                         if !ty.is_error() && !ty.assignable_from(&self.expr_ty(init, scope)) {
                             self.error_type_mismatch(&ty, &self.expr_ty(init, scope), b.span);
                         }
+                    }
+                    self.index.define(
+                        &name,
+                        &self.current_file,
+                        b.span,
+                        Some(&ty),
+                        SymbolKind::Local,
+                    );
+                    if !had_ann && !ty.is_error() {
+                        self.index
+                            .inlay(&self.current_file, b.span, format!(": {}", ty.display()));
                     }
                     scope.insert(name.clone(), ty.clone());
                     result.push(Stmt::Var {
@@ -988,7 +1217,30 @@ impl Checker {
                         false,
                     ))],
                 },
-                IfElse::If(_) => Body { stmts: vec![] },
+                IfElse::If(inner) => match inner.as_ref() {
+                    AExpr::If {
+                        arms,
+                        else_branch,
+                        ..
+                    } => Body {
+                        stmts: self.check_if_stmt(
+                            arms,
+                            else_branch.as_ref(),
+                            scope,
+                            self_ty,
+                            throws,
+                        ),
+                    },
+                    other => Body {
+                        stmts: vec![Stmt::Expr(self.check_expr(
+                            other,
+                            scope,
+                            self_ty,
+                            throws,
+                            false,
+                        ))],
+                    },
+                },
             });
             return vec![Stmt::If {
                 cond,
@@ -1060,10 +1312,26 @@ impl Checker {
             .as_ref()
             .map(|t| self.resolve_ast_type(t))
             .or_else(|| pattern_type(&b.pattern).map(|t| self.resolve_ast_type(t)));
-        let init = b
-            .initializer
-            .as_ref()
-            .map(|e| self.check_expr(e, scope, self_ty, throws, false));
+        let init = b.initializer.as_ref().map(|e| {
+            let mut expr = self.check_expr(e, scope, self_ty, throws, true);
+            // Specialize JSON/TOON decode return type from annotation.
+            if let Some(ref expected) = ann {
+                if let Expr::Call {
+                    callee: Callee::Builtin(ref bid),
+                    ty,
+                    ..
+                } = &mut expr
+                {
+                    if (bid == "json_decode" || bid == "toon_decode")
+                        && (ty.is_error()
+                            || matches!(ty, Ty::Named(n) if n == "Decodable"))
+                    {
+                        *ty = expected.clone();
+                    }
+                }
+            }
+            expr
+        });
         (name, init, ann)
     }
 
@@ -1171,6 +1439,10 @@ impl Checker {
                     inner
                 }
             }
+            // Phase 3 MVP: await is a no-op (cooperative single-threaded).
+            AExpr::Await { expr, .. } => {
+                self.check_expr(expr, scope, self_ty, throws, throws_ok)
+            }
             AExpr::Catch { expr, catches, .. } => {
                 self.check_catch(expr, catches, scope, self_ty, throws, throws_ok)
             }
@@ -1267,9 +1539,15 @@ impl Checker {
             return Expr::Local(name.to_string());
         }
         if is_type_name(name) || self.types.contains_key(name) {
+            if let Some(id) = self.index.lookup_name(&self.current_file, name) {
+                self.index.reference(id, &self.current_file, span);
+            }
             return Expr::Local(name.to_string());
         }
         if scope.get(name).is_some() {
+            if let Some(id) = self.index.lookup_name(&self.current_file, name) {
+                self.index.reference(id, &self.current_file, span);
+            }
             return if scope.is_param(name) {
                 Expr::Param(name.to_string())
             } else {
@@ -1277,6 +1555,9 @@ impl Checker {
             };
         }
         if self.module_funcs.contains_key(name) || builtin_funcs().contains_key(name) {
+            if let Some(id) = self.index.lookup_name(&self.current_file, name) {
+                self.index.reference(id, &self.current_file, span);
+            }
             return Expr::Local(name.to_string());
         }
         self.error(
@@ -1369,18 +1650,35 @@ impl Checker {
                 }
             }
             if name == "print" || builtin_funcs().contains_key(name) {
-                let checked = self.check_args_against(
-                    args,
-                    &builtin_funcs()[name].0,
-                    scope,
-                    self_ty.clone(),
-                    throws.clone(),
-                    throws_ok,
-                );
+                let (params, ret, throws_ty, bid) = builtin_funcs()[name].clone();
+                let checked = if name == "runAgent" {
+                    self.check_call_args(
+                        args,
+                        &[
+                            ("model".into(), Ty::Named("ChatModel".into())),
+                            ("tools".into(), Ty::Named("ToolRegistry".into())),
+                            ("user".into(), Ty::String),
+                        ],
+                        scope,
+                        self_ty.clone(),
+                        throws.clone(),
+                        throws_ok,
+                    )
+                } else {
+                    self.check_args_against(
+                        args,
+                        &params,
+                        scope,
+                        self_ty.clone(),
+                        throws.clone(),
+                        throws_ok,
+                    )
+                };
+                self.verify_try(&throws_ty, try_kind, throws_ok, span);
                 return Expr::Call {
-                    callee: Callee::Builtin(name.to_string()),
+                    callee: Callee::Builtin(bid.to_string()),
                     args: checked,
-                    ty: Ty::Void,
+                    ty: ret,
                     is_try: map_try(try_kind),
                 };
             }
@@ -1476,14 +1774,9 @@ impl Checker {
 
         let callee_expr = self.check_expr(callee, scope, self_ty.clone(), throws.clone(), throws_ok);
         if let Expr::Local(ref n) = callee_expr {
-            if let Some(sig) = self.module_funcs.get(n).cloned() {
+            if let Some((sig, mangled)) = self.module_funcs.get(n).cloned() {
                 let checked = self.check_call_args(args, &sig.params, scope, self_ty.clone(), throws.clone(), throws_ok);
                 self.verify_try(&sig.throws, try_kind, throws_ok, span);
-                let mangled = if !self.namespace.is_empty() {
-                    format!("{}.{}", self.namespace, n)
-                } else {
-                    n.clone()
-                };
                 return Expr::Call {
                     callee: Callee::Func(mangled),
                     args: checked,
@@ -1558,6 +1851,14 @@ impl Checker {
         scope: &Scope,
         self_ty: Option<Ty>,
     ) -> Expr {
+        // `funcName.self` — function reference (LLM tool registration).
+        if name == "self" {
+            if let Expr::Local(ref n) = base {
+                if self.module_funcs.contains_key(n) || builtin_funcs().contains_key(n) {
+                    return base;
+                }
+            }
+        }
         let base_ty = self.expr_ty(&base, scope);
         if base_ty == Ty::String {
             if let Some((ty, _, bid)) = builtin_members().get(&("String".into(), name.to_string())) {
@@ -1990,13 +2291,15 @@ impl Checker {
     }
 
     fn error(&mut self, code: &str, message: impl Into<String>, span: Span) {
-        self.diagnostics
-            .push(Diagnostic::error(code, message, span));
+        self.diagnostics.push(
+            Diagnostic::error(code, message, span).with_file(self.current_file.clone()),
+        );
     }
 
     fn warn(&mut self, code: &str, message: impl Into<String>, span: Span) {
-        self.diagnostics
-            .push(Diagnostic::warning(code, message, span));
+        self.diagnostics.push(
+            Diagnostic::warning(code, message, span).with_file(self.current_file.clone()),
+        );
     }
 
     fn error_type_mismatch(&mut self, expected: &Ty, found: &Ty, span: Span) {

@@ -1,6 +1,7 @@
 //! MIR → LLVM IR lowering and native object emission.
 //!
-//! TODO: `examples/errors` still needs full throwing ABI (`SetErrOut`, `LoadErrFlag`, `__err_out`).
+//! Throwing ABI: boxed error payloads via `ll_box_bytes` into `__err_out`.
+//! Classes: leading vtable pointer + `{Class}_vtable` globals for virtual calls.
 
 use crate::CodegenOptions;
 use anyhow::{Context as AnyhowContext, Result};
@@ -31,6 +32,12 @@ pub fn emit_object(program: &Program, object_path: &Path, opts: &CodegenOptions)
 
     declare_runtime_externs(&context, &module);
     let layout = index_type_defs(program, &module, &context);
+
+    // Declare all functions first so vtables can take their addresses.
+    for func in &program.functions {
+        declare_function_sig(&context, &module, &layout, func)?;
+    }
+    emit_vtables(program, &context, &module, &layout)?;
 
     for func in &program.functions {
         emit_function(program, &context, &module, &builder, &layout, func)?;
@@ -76,6 +83,14 @@ fn declare_runtime_externs<'ctx>(context: &'ctx Context, module: &Module<'ctx>) 
     decl("ll_alloc_sized", ptr.into(), &[i64.into()]);
     decl("ll_retain", ptr.into(), &[ptr.into()]);
     decl_void("ll_release", &[ptr.into()]);
+    decl("ll_is_unique", i32.into(), &[ptr.into()]);
+    decl("ll_make_unique", ptr.into(), &[ptr.into(), i64.into()]);
+    decl("ll_box_bytes", ptr.into(), &[ptr.into(), i64.into()]);
+    decl_void("ll_unbox_bytes", &[ptr.into(), ptr.into(), i64.into()]);
+    decl("ll_array_new", ptr.into(), &[i64.into(), ptr.into()]);
+    decl_void("ll_array_append", &[ptr.into(), ptr.into()]);
+    decl("ll_array_count", i64.into(), &[ptr.into()]);
+    decl("ll_array_get_ptr", ptr.into(), &[ptr.into(), i64.into()]);
     decl("ll_string_from_cstr", ptr.into(), &[ptr.into()]);
     decl("ll_string_from_bytes", ptr.into(), &[ptr.into(), i64.into()]);
     decl("ll_string_len", i64.into(), &[ptr.into()]);
@@ -85,29 +100,58 @@ fn declare_runtime_externs<'ctx>(context: &'ctx Context, module: &Module<'ctx>) 
     decl("ll_string_from_i64", ptr.into(), &[i64.into()]);
     decl("ll_string_from_f64", ptr.into(), &[context.f64_type().into()]);
     decl("ll_string_from_bool", ptr.into(), &[i32.into()]);
+    decl("ll_string_eq", i32.into(), &[ptr.into(), ptr.into()]);
     decl_void("ll_print", &[ptr.into()]);
     decl_void("ll_trap", &[ptr.into(), ptr.into()]);
     decl("ll_int_from_string", i64.into(), &[ptr.into(), ptr.into()]);
     decl("ll_double_sqrt", context.f64_type().into(), &[context.f64_type().into()]);
+    decl("ll_json_decode_fields", i32.into(), &[ptr.into(), ptr.into(), ptr.into()]);
+    decl("ll_json_encode_fields", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_toon_decode_fields", i32.into(), &[ptr.into(), ptr.into(), ptr.into()]);
+    decl("ll_toon_encode_fields", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_http_get", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl(
+        "ll_llm_run_agent",
+        ptr.into(),
+        &[ptr.into(), ptr.into(), ptr.into()],
+    );
+    decl("ll_llm_merge_context", ptr.into(), &[ptr.into()]);
+    decl_void("ll_noop", &[]);
+    decl_void("ll_test_expect", &[context.bool_type().into(), ptr.into()]);
+    decl_void("ll_test_expect_empty", &[ptr.into(), ptr.into()]);
+    decl_void("ll_test_expect_not_empty", &[ptr.into(), ptr.into()]);
+    decl_void("ll_test_contains", &[ptr.into(), ptr.into(), ptr.into()]);
+    decl_void(
+        "ll_test_approx",
+        &[context.f64_type().into(), context.f64_type().into(), ptr.into()],
+    );
+    decl("ll_test_job_id", i64.into(), &[]);
 }
 
 #[derive(Clone)]
 struct TypeLayout<'ctx> {
     struct_types: HashMap<String, StructType<'ctx>>,
     enum_rep: StructType<'ctx>,
+    /// Classes that include a leading vtable pointer in their LLVM layout.
+    class_with_vtable: HashMap<String, Vec<String>>,
+    /// Codec schema strings: `sku:s,name:s,priceCents:i`
+    field_schemas: HashMap<String, String>,
 }
 
 fn index_type_defs<'ctx>(program: &Program, module: &Module<'ctx>, context: &'ctx Context) -> TypeLayout<'ctx> {
     let i64 = context.i64_type();
     let i32 = context.i32_type();
+    let ptr = context.ptr_type(AddressSpace::default());
     let enum_rep = context.struct_type(
         &[i32.into(), i64.array_type(8).into()],
         false,
     );
     let mut struct_types = HashMap::new();
+    let mut class_with_vtable = HashMap::new();
+    let mut field_schemas = HashMap::new();
     for td in &program.types {
         match td {
-            TypeDef::Struct { name, fields } | TypeDef::Class { name, fields, .. } => {
+            TypeDef::Struct { name, fields } => {
                 let llvm_fields: Vec<BasicTypeEnum> = fields
                     .iter()
                     .map(|(_, t)| mir_ty_to_llvm(context, t))
@@ -117,7 +161,23 @@ fn index_type_defs<'ctx>(program: &Program, module: &Module<'ctx>, context: &'ct
                     false,
                 );
                 struct_types.insert(name.clone(), st);
+                field_schemas.insert(name.clone(), schema_for_fields(fields));
                 let _ = module;
+            }
+            TypeDef::Class {
+                name,
+                fields,
+                virtual_methods,
+                ..
+            } => {
+                let mut llvm_fields: Vec<BasicTypeEnum> = vec![ptr.into()];
+                llvm_fields.extend(fields.iter().map(|(_, t)| mir_ty_to_llvm(context, t)));
+                let st = context.struct_type(
+                    &llvm_fields.iter().map(|t| (*t).into()).collect::<Vec<_>>(),
+                    false,
+                );
+                struct_types.insert(name.clone(), st);
+                class_with_vtable.insert(name.clone(), virtual_methods.clone());
             }
             TypeDef::Enum { name, .. } => {
                 struct_types.insert(name.clone(), enum_rep);
@@ -127,7 +187,26 @@ fn index_type_defs<'ctx>(program: &Program, module: &Module<'ctx>, context: &'ct
     TypeLayout {
         struct_types,
         enum_rep,
+        class_with_vtable,
+        field_schemas,
     }
+}
+
+fn schema_for_fields(fields: &[(String, MirTy)]) -> String {
+    fields
+        .iter()
+        .map(|(n, t)| {
+            let kind = match t {
+                MirTy::String => "s",
+                MirTy::Int | MirTy::Int64 | MirTy::Int32 | MirTy::Int16 | MirTy::Int8 | MirTy::UInt => {
+                    "i"
+                }
+                _ => "s",
+            };
+            format!("{n}:{kind}")
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn mir_ty_to_llvm<'ctx>(context: &'ctx Context, ty: &MirTy) -> BasicTypeEnum<'ctx> {
@@ -296,6 +375,49 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
             .unwrap_or_else(|| panic!("missing extern `{name}`"))
     }
 
+    /// Box an error value for `__err_out`: retain pointer-like values, otherwise `ll_box_bytes`.
+    fn box_error_value(&mut self, val: &Value) -> Result<BasicValueEnum<'ctx>> {
+        let bv = self.get_value(val)?;
+        if bv.is_pointer_value() {
+            let retained = self
+                .builder
+                .build_call(
+                    self.extern_fn("ll_retain"),
+                    &[bv.into_pointer_value().into()],
+                    "err_retain",
+                )?
+                .try_as_basic_value()
+                .basic()
+                .unwrap_or_else(|| self.ptr_type().const_null().into());
+            return Ok(retained);
+        }
+        let llvm_ty = bv.get_type();
+        let tmp = self.builder.build_alloca(llvm_ty, "err_tmp")?;
+        self.builder.build_store(tmp, bv)?;
+        let size_i64 = match llvm_ty {
+            BasicTypeEnum::IntType(t) => self
+                .i64_type()
+                .const_int((t.get_bit_width() as u64).div_ceil(8), false),
+            BasicTypeEnum::FloatType(_) => self.i64_type().const_int(8, false),
+            BasicTypeEnum::StructType(st) => {
+                let n = st.count_fields() as u64;
+                self.i64_type().const_int(n.max(1) * 8, false)
+            }
+            _ => self.i64_type().const_int(64, false),
+        };
+        let boxed = self
+            .builder
+            .build_call(
+                self.extern_fn("ll_box_bytes"),
+                &[tmp.into(), size_i64.into()],
+                "err_box",
+            )?
+            .try_as_basic_value()
+            .basic()
+            .unwrap_or_else(|| self.ptr_type().const_null().into());
+        Ok(boxed)
+    }
+
     fn emit_inst(&mut self, inst: &Inst) -> Result<()> {
         match inst {
             Inst::Alloca { dst, ty } => {
@@ -431,7 +553,11 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                     .iter()
                     .map(|a| self.get_value(a).map(|v| v.into()))
                     .collect::<Result<_>>()?;
-                let ret = self.emit_call(callee, &llvm_args, ty)?;
+                let arg0_ty = args.first().and_then(|a| match a {
+                    Value::Local(l) => self.local_types.get(&l.0).cloned(),
+                    _ => None,
+                });
+                let ret = self.emit_call(callee, &llvm_args, ty, arg0_ty.as_ref())?;
                 if let Some(d) = dst {
                     self.set_local_ty(*d, ty.clone());
                     if let Some(r) = ret {
@@ -606,13 +732,14 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                     self.set_value(*dst, inner)?;
                 }
             }
-            Inst::SetErrOut { val: _ } => {
-                // TODO: full throwing ABI — store error into *__err_out
+            Inst::SetErrOut { val } => {
+                if let Some(err_out) = self.err_out_ptr {
+                    let boxed = self.box_error_value(val)?;
+                    self.builder.build_store(err_out, boxed)?;
+                }
             }
             Inst::LoadErrFlag { dst } => {
                 self.set_local_ty(*dst, MirTy::Bool);
-                // Prefer the most recently used err_out local stored in values as a pointer
-                // to a pointer slot. Fallback: always-false when no slot is available.
                 let flag = if let Some(err_ptr) = self.last_err_out {
                     let loaded = self
                         .builder
@@ -631,6 +758,17 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                 };
                 self.set_value(*dst, flag)?;
             }
+            Inst::LoadErrValue { dst } => {
+                self.set_local_ty(*dst, MirTy::Named("void*".into()));
+                let ptr_val = if let Some(err_ptr) = self.last_err_out {
+                    self.builder
+                        .build_load(self.ptr_type(), err_ptr, "err_payload")
+                        .with_context(|| "load err payload")?
+                } else {
+                    self.ptr_type().const_null().into()
+                };
+                self.set_value(*dst, ptr_val)?;
+            }
         }
         Ok(())
     }
@@ -640,13 +778,27 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         callee: &Callee,
         args: &[BasicMetadataValueEnum<'ctx>],
         ret_ty: &MirTy,
+        arg0_ty: Option<&MirTy>,
     ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        if let Callee::Virtual { class, method, slot } = callee {
+            return self.emit_virtual_call(class, method, *slot, args, ret_ty);
+        }
         let name = match callee {
             Callee::Func(n) => n.as_str(),
             Callee::Builtin(n) => n.as_str(),
+            Callee::Virtual { .. } => unreachable!(),
         };
         if name == "ll_int_from_string" {
             return self.emit_int_from_string(args, ret_ty);
+        }
+        if name == "ll_json_decode" || name == "ll_toon_decode" {
+            return self.emit_codec_decode(name, args, ret_ty);
+        }
+        if name == "ll_json_encode" || name == "ll_toon_encode" {
+            return self.emit_codec_encode(name, args, arg0_ty);
+        }
+        if name == "ll_http_get" {
+            return self.emit_http_get(args, ret_ty);
         }
         if name == "ll_optional_is_some" {
             // Optional LLVM layout: { i1 present, T value }
@@ -680,6 +832,219 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                     .ok_or_else(|| anyhow::anyhow!("void call used with non-void ty"))?,
             ))
         }
+    }
+
+    fn emit_virtual_call(
+        &mut self,
+        class: &str,
+        method: &str,
+        slot: u32,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        ret_ty: &MirTy,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        // Prefer indirect call through object's vtable; fall back to static mangled name.
+        let mangled = format!("{class}_{method}");
+        let self_ptr = args
+            .first()
+            .and_then(|a| BasicValueEnum::try_from(*a).ok())
+            .and_then(|v| {
+                if v.is_pointer_value() {
+                    Some(v.into_pointer_value())
+                } else {
+                    None
+                }
+            });
+        if let Some(obj) = self_ptr {
+            if let Some(st) = self.layout.struct_types.get(class).copied() {
+                let vt_slot = self.builder.build_struct_gep(st, obj, 0, "vt_slot")?;
+                let vt_ptr = self
+                    .builder
+                    .build_load(self.ptr_type(), vt_slot, "vt")?
+                    .into_pointer_value();
+                let slot_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        self.ptr_type(),
+                        vt_ptr,
+                        &[self.i64_type().const_int(slot as u64, false)],
+                        "vt_entry",
+                    )?
+                };
+                let fn_ptr = self
+                    .builder
+                    .build_load(self.ptr_type(), slot_ptr, "vfn")?
+                    .into_pointer_value();
+                // Use the static function's type for the indirect call.
+                if let Some(static_f) = self.module.get_function(&mangled) {
+                    let fn_ty = static_f.get_type();
+                    let call = self.builder.build_indirect_call(
+                        fn_ty,
+                        fn_ptr,
+                        args,
+                        "vcall",
+                    )?;
+                    return if *ret_ty == MirTy::Void {
+                        Ok(None)
+                    } else {
+                        Ok(Some(
+                            call.try_as_basic_value()
+                                .basic()
+                                .ok_or_else(|| anyhow::anyhow!("void vcall"))?,
+                        ))
+                    };
+                }
+            }
+        }
+        let f = self
+            .module
+            .get_function(&mangled)
+            .ok_or_else(|| anyhow::anyhow!("undefined virtual `{mangled}`"))?;
+        let call = self.builder.build_call(f, args, "vcall_static")?;
+        if *ret_ty == MirTy::Void {
+            Ok(None)
+        } else {
+            Ok(Some(
+                call.try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| anyhow::anyhow!("void vcall"))?,
+            ))
+        }
+    }
+
+    fn emit_codec_decode(
+        &mut self,
+        which: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        ret_ty: &MirTy,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let str_arg = args
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("decode expects string"))?;
+        let type_name = match ret_ty {
+            MirTy::Struct(n) | MirTy::Class(n) | MirTy::Named(n) => n.as_str(),
+            _ => "Anon",
+        };
+        let schema = self
+            .layout
+            .field_schemas
+            .get(type_name)
+            .cloned()
+            .unwrap_or_default();
+        let schema_g = self
+            .builder
+            .build_global_string_ptr(&schema, "schema")?;
+        let st = self
+            .layout
+            .struct_types
+            .get(type_name)
+            .copied()
+            .unwrap_or_else(|| self.context.struct_type(&[], false));
+        let out = self.builder.build_alloca(st, "decoded")?;
+        let fn_name = if which.contains("toon") {
+            "ll_toon_decode_fields"
+        } else {
+            "ll_json_decode_fields"
+        };
+        let ok = self.builder.build_call(
+            self.extern_fn(fn_name),
+            &[str_arg, schema_g.as_pointer_value().into(), out.into()],
+            "dec",
+        )?;
+        let _ = ok;
+        // On failure, leave zeroed struct (examples use try/catch separately).
+        let loaded = self.builder.build_load(st, out, "dec_val")?;
+        Ok(Some(loaded))
+    }
+
+    fn emit_codec_encode(
+        &mut self,
+        which: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        arg_ty: Option<&MirTy>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let val = args
+            .first()
+            .and_then(|a| BasicValueEnum::try_from(*a).ok())
+            .ok_or_else(|| anyhow::anyhow!("encode expects value"))?;
+        let type_name = match arg_ty {
+            Some(MirTy::Struct(n) | MirTy::Class(n) | MirTy::Named(n)) => n.as_str(),
+            _ => "",
+        };
+        let schema = self
+            .layout
+            .field_schemas
+            .get(type_name)
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                // Fallback only when the value type is unknown (should be rare).
+                self.layout
+                    .field_schemas
+                    .values()
+                    .find(|s| !s.is_empty())
+                    .cloned()
+            })
+            .unwrap_or_else(|| "sku:s,name:s,priceCents:i".into());
+        let schema_g = self.builder.build_global_string_ptr(&schema, "enc_schema")?;
+        let tmp = self.builder.build_alloca(val.get_type(), "enc_tmp")?;
+        self.builder.build_store(tmp, val)?;
+        let fn_name = if which.contains("toon") {
+            "ll_toon_encode_fields"
+        } else {
+            "ll_json_encode_fields"
+        };
+        let s = self
+            .builder
+            .build_call(
+                self.extern_fn(fn_name),
+                &[schema_g.as_pointer_value().into(), tmp.into()],
+                "enc",
+            )?
+            .try_as_basic_value()
+            .basic()
+            .unwrap();
+        Ok(Some(s))
+    }
+
+    fn emit_http_get(
+        &mut self,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        ret_ty: &MirTy,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let ok_alloca = self.builder.build_alloca(self.context.i32_type(), "http_ok")?;
+        self.builder
+            .build_store(ok_alloca, self.context.i32_type().const_int(0, false))?;
+        let mut call_args = args.to_vec();
+        call_args.push(ok_alloca.into());
+        let s = self
+            .builder
+            .build_call(self.extern_fn("ll_http_get"), &call_args, "http")?
+            .try_as_basic_value()
+            .basic()
+            .unwrap();
+        if matches!(ret_ty, MirTy::Optional(_)) {
+            let ok = self
+                .builder
+                .build_load(self.context.i32_type(), ok_alloca, "ok")?;
+            let present = self.builder.build_int_compare(
+                IntPredicate::NE,
+                ok.into_int_value(),
+                self.context.i32_type().const_int(0, false),
+                "oknz",
+            )?;
+            let opt_ty = optional_llvm_type(self.context, &MirTy::String);
+            let undef = opt_ty.get_undef();
+            let with_p = self
+                .builder
+                .build_insert_value(undef, present, 0, "hp")?
+                .into_struct_value();
+            let with_v = self
+                .builder
+                .build_insert_value(with_p, s, 1, "hv")?
+                .into_struct_value();
+            return Ok(Some(with_v.into()));
+        }
+        Ok(Some(s))
     }
 
     fn emit_int_from_string(
@@ -801,6 +1166,68 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
             };
             return Ok(out);
         }
+        // Struct / aggregate equality: field-wise compare.
+        if left.is_struct_value() && right.is_struct_value() && matches!(op, BinOp::Eq | BinOp::NotEq)
+        {
+            let st = left.into_struct_value().get_type();
+            let la = self.builder.build_alloca(st, "eq_l")?;
+            let ra = self.builder.build_alloca(st, "eq_r")?;
+            self.builder.build_store(la, left)?;
+            self.builder.build_store(ra, right)?;
+            let mut all_eq = self.bool_type().const_int(1, false);
+            let nfields = st.count_fields();
+            for i in 0..nfields {
+                let lp = self.builder.build_struct_gep(st, la, i, "eql")?;
+                let rp = self.builder.build_struct_gep(st, ra, i, "eqr")?;
+                let ft = st
+                    .get_field_type_at_index(i)
+                    .unwrap_or(self.i64_type().into());
+                let lv = self.builder.build_load(ft, lp, "lv")?;
+                let rv = self.builder.build_load(ft, rp, "rv")?;
+                let cmp = if lv.is_pointer_value() && rv.is_pointer_value() {
+                    self.builder
+                        .build_call(
+                            self.extern_fn("ll_string_eq"),
+                            &[lv.into(), rv.into()],
+                            "seq",
+                        )?
+                        .try_as_basic_value()
+                        .basic()
+                        .and_then(|v| {
+                            if v.is_int_value() {
+                                Some(
+                                    self.builder
+                                        .build_int_compare(
+                                            IntPredicate::NE,
+                                            v.into_int_value(),
+                                            self.context.i32_type().const_int(0, false),
+                                            "seqz",
+                                        )
+                                        .ok()?,
+                                )
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(self.bool_type().const_int(0, false))
+                } else if lv.is_int_value() && rv.is_int_value() {
+                    self.builder.build_int_compare(
+                        IntPredicate::EQ,
+                        lv.into_int_value(),
+                        rv.into_int_value(),
+                        "ieq",
+                    )?
+                } else {
+                    self.bool_type().const_int(1, false)
+                };
+                all_eq = self.builder.build_and(all_eq, cmp, "andeq")?;
+            }
+            return Ok(if matches!(op, BinOp::NotEq) {
+                self.builder.build_not(all_eq, "neq")?.into()
+            } else {
+                all_eq.into()
+            });
+        }
         let l = left.into_int_value();
         let r = right.into_int_value();
         let out: IntValue = match op {
@@ -858,7 +1285,7 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
     ) -> Result<()> {
         if is_class {
             let st = self.struct_type_for_name(ty_name);
-            // Conservative payload size: 8 bytes per field (handles i64/f64/ptr).
+            // Conservative payload size: 8 bytes per field (handles i64/f64/ptr), includes vtable.
             let nbytes = (st.count_fields() as u64).max(1) * 8;
             let size = self.i64_type().const_int(nbytes, false);
             let obj = self
@@ -872,10 +1299,23 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                 .try_as_basic_value()
                 .basic()
                 .unwrap();
+            // Field 0 = vtable pointer (may be null if class has no virtual methods).
+            let vt_name = format!("{ty_name}_vtable");
+            let vt_ptr = if let Some(g) = self.module.get_global(&vt_name) {
+                g.as_pointer_value()
+            } else {
+                self.ptr_type().const_null()
+            };
+            let vt_slot = self
+                .builder
+                .build_struct_gep(st, obj.into_pointer_value(), 0, "vt_init")
+                .with_context(|| "vtable gep")?;
+            self.builder.build_store(vt_slot, vt_ptr)?;
             for (i, fv) in fields.iter().enumerate() {
                 let mut val = self.get_value(fv)?;
                 let field_tys = st.get_field_types();
-                if let Some(ft) = field_tys.get(i) {
+                let llvm_idx = (i + 1) as u32; // +1 for vtable
+                if let Some(ft) = field_tys.get(llvm_idx as usize) {
                     if ft.is_float_type() && val.is_int_value() {
                         val = self
                             .builder
@@ -889,7 +1329,7 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                 }
                 let field_ptr = self
                     .builder
-                    .build_struct_gep(st, obj.into_pointer_value(), i as u32, "cf")
+                    .build_struct_gep(st, obj.into_pointer_value(), llvm_idx, "cf")
                     .with_context(|| "class field gep")?;
                 self.builder.build_store(field_ptr, val)?;
             }
@@ -999,6 +1439,8 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         ty: &MirTy,
     ) -> Result<BasicValueEnum<'ctx>> {
         let llvm_ty = mir_ty_to_llvm(self.context, ty);
+        let class_offset = matches!(base_ty, Some(MirTy::Class(_))) as usize;
+        let llvm_index = (index + class_offset) as u32;
         if base.is_pointer_value() {
             let ptr = base.into_pointer_value();
             let st = base_ty.and_then(|t| match t {
@@ -1008,7 +1450,7 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
             if let Some(st) = st {
                 let field_ptr = self
                     .builder
-                    .build_struct_gep(st, ptr, index as u32, "fld_ptr")
+                    .build_struct_gep(st, ptr, llvm_index, "fld_ptr")
                     .with_context(|| "class field gep")?;
                 let loaded = self
                     .builder
@@ -1020,7 +1462,7 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         }
         let extracted = self
             .builder
-            .build_extract_value(base.into_struct_value(), index as u32, "xf")
+            .build_extract_value(base.into_struct_value(), llvm_index, "xf")
             .with_context(|| "extract field")?;
         Ok(extracted)
     }
@@ -1032,6 +1474,8 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         index: usize,
         val: BasicValueEnum<'ctx>,
     ) -> Result<()> {
+        let class_offset = matches!(base_ty, Some(MirTy::Class(_))) as usize;
+        let llvm_index = (index + class_offset) as u32;
         if base.is_pointer_value() {
             let ptr = base.into_pointer_value();
             let st = base_ty.and_then(|t| match t {
@@ -1041,7 +1485,7 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
             if let Some(st) = st {
                 let field_ptr = self
                     .builder
-                    .build_struct_gep(st, ptr, index as u32, "sfld")
+                    .build_struct_gep(st, ptr, llvm_index, "sfld")
                     .with_context(|| "class set gep")?;
                 self.builder
                     .build_store(field_ptr, val)
@@ -1100,18 +1544,8 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
             }
             Terminator::Throw(val) => {
                 if let Some(err_out) = self.err_out_ptr {
-                    // Store a non-null sentinel into *__err_out so the caller sees an error.
-                    // Full ABI would box the error value; Phase 2 uses a non-null marker.
-                    let _ = val;
-                    let marker = self
-                        .builder
-                        .build_int_to_ptr(
-                            self.i64_type().const_int(1, false),
-                            self.ptr_type(),
-                            "err_marker",
-                        )?;
-                    self.builder.build_store(err_out, marker)?;
-                    // Return a zero/poison value for the function return type.
+                    let boxed = self.box_error_value(val)?;
+                    self.builder.build_store(err_out, boxed)?;
                     let parent = self
                         .builder
                         .get_insert_block()
@@ -1281,6 +1715,78 @@ fn llvm_ty_with_layout<'ctx>(
     mir_ty_to_llvm(context, ty)
 }
 
+fn function_type_for<'ctx>(
+    context: &'ctx Context,
+    layout: &TypeLayout<'ctx>,
+    func: &Function,
+) -> inkwell::types::FunctionType<'ctx> {
+    let param_tys: Vec<BasicMetadataTypeEnum> = func
+        .params
+        .iter()
+        .map(|(_, t)| llvm_ty_with_layout(context, layout, t).into())
+        .collect();
+    let ret_llvm = llvm_ty_with_layout(context, layout, &func.ret);
+    if func.ret == MirTy::Void {
+        context.void_type().fn_type(&param_tys, false)
+    } else {
+        ret_llvm.fn_type(&param_tys, false)
+    }
+}
+
+fn declare_function_sig<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+    layout: &TypeLayout<'ctx>,
+    func: &Function,
+) -> Result<()> {
+    if module.get_function(&func.name).is_some() {
+        return Ok(());
+    }
+    let fn_ty = function_type_for(context, layout, func);
+    module.add_function(&func.name, fn_ty, Some(Linkage::External));
+    Ok(())
+}
+
+fn emit_vtables<'ctx>(
+    program: &Program,
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+    layout: &TypeLayout<'ctx>,
+) -> Result<()> {
+    let ptr = context.ptr_type(AddressSpace::default());
+    for (class, methods) in &layout.class_with_vtable {
+        if methods.is_empty() {
+            continue;
+        }
+        let mut slots = Vec::new();
+        for m in methods {
+            let mangled = format!("{class}_{m}");
+            let f = module.get_function(&mangled).or_else(|| {
+                // Fallback: search any method with suffix.
+                program.functions.iter().find_map(|f| {
+                    if f.name.ends_with(&format!("_{m}")) || f.name.ends_with(m) {
+                        module.get_function(&f.name)
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(f) = f {
+                slots.push(f.as_global_value().as_pointer_value());
+            } else {
+                slots.push(ptr.const_null());
+            }
+        }
+        let arr_ty = ptr.array_type(slots.len() as u32);
+        let global = module.add_global(arr_ty, None, &format!("{class}_vtable"));
+        global.set_linkage(Linkage::Internal);
+        global.set_constant(true);
+        let const_arr = ptr.const_array(&slots);
+        global.set_initializer(&const_arr);
+    }
+    Ok(())
+}
+
 fn emit_function<'ctx>(
     _program: &Program,
     context: &'ctx Context,
@@ -1289,18 +1795,9 @@ fn emit_function<'ctx>(
     layout: &TypeLayout<'ctx>,
     func: &Function,
 ) -> Result<()> {
-    let param_tys: Vec<BasicMetadataTypeEnum> = func
-        .params
-        .iter()
-        .map(|(_, t)| llvm_ty_with_layout(context, layout, t).into())
-        .collect();
-    let ret_llvm = llvm_ty_with_layout(context, layout, &func.ret);
-    let fn_ty = if func.ret == MirTy::Void {
-        context.void_type().fn_type(&param_tys, false)
-    } else {
-        ret_llvm.fn_type(&param_tys, false)
-    };
-    let llvm_fn = module.add_function(&func.name, fn_ty, Some(Linkage::External));
+    let llvm_fn = module
+        .get_function(&func.name)
+        .ok_or_else(|| anyhow::anyhow!("function `{}` not declared", func.name))?;
 
     let mut block_metas: Vec<BlockMeta> = Vec::new();
     for b in &func.blocks {

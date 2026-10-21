@@ -2,7 +2,7 @@
 
 The LLLang standard library ships as prebuilt **`.bll`** artifacts referenced from your package manifest. Application code imports modules by name (`import Std.Json`); **`Std.Core`** is always in scope and does not require an import.
 
-**Status:** API surface is stable in documentation; runtime implementations land in [Phase 3](../../ROADMAP.md). Signatures below are the contract importers and `.sbl` exports must match.
+**Status:** API surface is documented; Phase 3 ships MVPs for Json/Toon/Http/Async/Llm sufficient for `examples/json-toon`, `async-http`, and `llm-agent`. Fuller streaming/SIMD/server surfaces remain documented contracts for later polish.
 
 ## Design principles
 

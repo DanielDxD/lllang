@@ -12,10 +12,11 @@ LLLang uses typed `throws(E)`. The runtime needs a calling convention that does 
 
 - Callees with `throws(E)` take an extra trailing parameter `__err_out: *mut *mut void` (pointer to an error-object slot).
 - On success the callee stores `null` into `*__err_out` and returns the normal value.
-- On `throw` the callee stores a non-null sentinel (Phase 2) and returns a zero/poison value for the result type.
-- Callers allocate an err slot, pass its address, then `LoadErrFlag` (non-null check) to implement `try?`, `catch`, etc.
+- On `throw` the callee boxes the error payload (`ll_box_bytes` / retain) into `*__err_out` and returns a zero/poison value for the result type.
+- Callers allocate an err slot, pass its address, then `LoadErrFlag` / `LoadErrValue` to implement `try?`, `catch`, etc.
+- Entry `ll_main` omits `__err_out` (C runtime calls it with no args); uncaught throws trap.
 
 ## Consequences
 
 - Simple, portable, works with the C runtime linker.
-- Full boxed error payloads and stack unwinding remain future work (see ROADMAP Phase 2.1).
+- Stack unwinding / DWARF exceptions remain future work (Phase 4+).

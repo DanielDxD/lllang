@@ -83,7 +83,7 @@ Supports keywords, strings, numbers, and nested comments — sufficient for blog
 
 | Editor | Status |
 |--------|--------|
-| Neovim | Community tree-sitter (Phase 4 optional) |
+| Neovim | Experimental stub: [`editors/tree-sitter-lllang`](../../editors/tree-sitter-lllang) (TextMate remains primary) |
 | JetBrains | Planned |
 | Zed | TextMate import |
 

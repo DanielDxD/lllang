@@ -77,12 +77,11 @@ Once name resolution and types exist:
 
 Diagnostics expand to type errors, unused bindings, and ABI export gaps in libraries.
 
-## Phase 4 capabilities (planned)
+## Phase 4 capabilities (MVP shipped)
 
-- Full type-aware completion with protocol constraints
-- Code lenses for `lang test` / run
-- Pull diagnostics for workspace-wide checks
-- Optional `llm/explain` code action hook
+- Type-aware completion: symbols from sema index; members after `.` from HIR + builtins
+- Code action: LL2005 missing `try` → insert `try `
+- Still planned: protocol-constraint completion, code lenses, pull diagnostics, `llm/explain`
 
 ## Multi-root workspaces
 

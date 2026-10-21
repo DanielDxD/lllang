@@ -8,25 +8,20 @@ The LLLang toolchain is a Rust workspace that shares front-end artifacts between
 llang/
 ├── Cargo.toml                 # workspace root
 ├── crates/
-│   ├── lllang-syntax/         # lexer, parser, AST, LL0xxx diagnostics
-│   ├── lllang-lsp/            # tower-lsp server, document sync, syntax features
-│   └── lang/                  # `lang` binary: check, lsp, --version; stubs later
+│   ├── lllang-syntax/         # lexer, parser, AST, fmt, LL0xxx diagnostics
+│   ├── lllang-manifest/       # Package.ll / Solution.ll
+│   ├── lllang-sema/           # name resolution, type check, symbol index
+│   ├── lllang-mir/            # MIR + ARC
+│   ├── lllang-llvm/           # inkwell LLVM 22 codegen
+│   ├── lllang-pack/           # .sbl/.bll, store, Package.lock
+│   ├── lllang-lsp/            # tower-lsp (diagnostics, nav, fmt, inlays)
+│   └── lang/                  # `lang` CLI
 ├── docs/                      # spec, guides, ADRs
 ├── editors/                   # VS Code, TextMate, web highlighters
 └── skills/                    # agent skills mirroring docs
 ```
 
-Future crates (Phase 2+) are expected to split concerns further:
-
-| Crate (planned) | Responsibility |
-|-----------------|----------------|
-| `lllang-ast` | Shared AST definitions if syntax splits lex/parse |
-| `lllang-sema` | Name resolution, type check, protocol conformance |
-| `lllang-mir` | Mid-level IR, ARC inserts, borrow checks |
-| `lllang-llvm` | inkwell bindings, LLVM 22 emission |
-| `lllang-pack` | `.bll` / `.sbl` packaging and ABI metadata |
-
-Phase 2 crates `lllang-manifest`, `lllang-sema`, `lllang-mir`, and `lllang-llvm` implement the vertical compile slice; `runtime/lllang_rt.c` provides ARC and core builtins.
+Phase 2–3 crates implement the vertical compile slice plus packing; `runtime/lllang_rt.c` provides ARC, JSON/TOON/HTTP/LLM MVP helpers.
 
 ## Compilation pipeline
 
