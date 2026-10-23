@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.0); empty = dry-run artifacts only"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            triple: aarch64-apple-darwin
+          - os: macos-13
+            triple: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            triple: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            triple: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.triple }}
+
+      - name: Install LLVM 22 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@22
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm@22)/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+          # Prefer distro llvm-22 when available; fall back to llvm-18+ for link/smoke only if needed.
+          sudo apt-get update -y
+          sudo apt-get install -y clang libsqlite3-dev
+          if apt-cache show llvm-22 >/dev/null 2>&1; then
+            sudo apt-get install -y llvm-22 llvm-22-dev libclang-22-dev
+            echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+          elif [ -d /usr/lib/llvm-22 ]; then
+            echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+          else
+            # Builder-only: require LLVM 22 for inkwell; fail clearly if missing.
+            echo "Attempting llvm-22 from apt.llvm.org…"
+            codename=$(lsb_release -cs)
+            echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-22 main" | sudo tee /etc/apt/sources.list.d/llvm22.list
+            sudo apt-get update -y
+            sudo apt-get install -y llvm-22 llvm-22-dev libclang-22-dev || true
+            if [ -d /usr/lib/llvm-22 ]; then
+              echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+            else
+              echo "LLVM 22 not available on this runner; install manually" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Install LLVM 22 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          winget install --id LLVM.LLVM -e --accept-package-agreements --accept-source-agreements --disable-interactivity
+          $llvm = "C:\Program Files\LLVM"
+          echo "LLVM_SYS_221_PREFIX=$llvm" >> $env:GITHUB_ENV
+          echo "$llvm\bin" >> $env:GITHUB_PATH
+          pwsh ./scripts/fetch-sqlite-windows.ps1
+
+      - name: Build release (Unix)
+        if: runner.os != 'Windows'
+        run: cargo build -p lang --release
+
+      - name: Build release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CC = "clang"
+          cargo build -p lang --release
+
+      - name: Smoke hello (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./target/release/lang check examples/hello
+          ./target/release/lang run --manifest examples/hello/Package.ll
+
+      - name: Smoke hello (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\target\release\lang.exe check examples\hello
+          .\target\release\lang.exe run --manifest examples\hello\Package.ll
+
+      - name: Pack (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x scripts/pack-release.sh
+          ./scripts/pack-release.sh
+
+      - name: Pack (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh ./scripts/pack-release.ps1
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lang-${{ matrix.triple }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Aggregate SHA256SUMS + assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -print0 |
+            while IFS= read -r -d '' f; do
+              cp "$f" release-assets/
+            done
+          : > release-assets/SHA256SUMS
+          # Prefer per-asset .sha256 files; fall back to any SHA256SUMS from matrix jobs.
+          if ls release-assets/*.sha256 >/dev/null 2>&1; then
+            cat release-assets/*.sha256 >> release-assets/SHA256SUMS
+          fi
+          find artifacts -type f -name SHA256SUMS -print0 |
+            while IFS= read -r -d '' s; do
+              cat "$s" >> release-assets/SHA256SUMS
+            done
+          # Deduplicate by filename (last wins).
+          awk '{print $2,$1}' release-assets/SHA256SUMS | awk '!a[$1]++{h[$1]=$2} END{for (f in h) print h[f], f}' | sort -k2 > release-assets/SHA256SUMS.sorted
+          mv release-assets/SHA256SUMS.sorted release-assets/SHA256SUMS
+          ls -la release-assets
+          cat release-assets/SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          draft: false
+          generate_release_notes: true
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.zip
+            release-assets/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

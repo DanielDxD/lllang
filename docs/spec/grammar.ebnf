@@ -78,7 +78,9 @@ typeDecl            = { attribute }
 
 typeKind            = "struct" | "class" | "enum" | "protocol" ;
 
-accessModifier      = "public" | "internal" | "private" | "fileprivate" ;
+accessModifier      = "open" | "public" | "internal" | "private" | "fileprivate" ;
+(* `protected` is rejected in sema — ADR 009 *)
+setterAccess        = ( "private" | "fileprivate" | "internal" ) "(set)" ;
 
 inheritanceClause   = ":" inheritanceList ;
 
@@ -232,6 +234,7 @@ propertyObserver    = "willSet" [ "(" identifier ")" ] block
 
 (* member var with observers or accessor keywords *)
 memberVarDecl       = accessModifier?
+                      setterAccess?
                       ( "var" | "let" )
                       identifier ":" typeRef
                       [ "=" expr ]

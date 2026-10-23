@@ -1,0 +1,10 @@
+version: 1
+packages[1]:
+  - name: prebuilt-greet
+    version: 0.1.0
+    sbl: 8ebf4c32dd70a80864cd57e755f65e6c05ed4d980511d89a517b5339b3b0c304
+    bll: 62490febfd9fc8d888357c01fd657b742247726cb9f1ff51d2391a25316d5d21
+    source: path:/Users/leandrodonato/daniellopes/opensource/llang/examples/prebuilt-greet
+    targets[1]:
+      - triple: portable
+        bll: 62490febfd9fc8d888357c01fd657b742247726cb9f1ff51d2391a25316d5d21

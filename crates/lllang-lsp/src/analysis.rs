@@ -20,18 +20,22 @@ pub struct AnalyzedDocument {
     pub map: SourceMap,
     pub parsed: ParseResult,
     pub sema: Option<SemaResult>,
+    /// Path → source for package-wide analysis (includes this buffer).
+    pub package_sources: HashMap<String, String>,
 }
 
 impl AnalyzedDocument {
     pub fn new(uri: Url, source: String) -> Self {
         let map = SourceMap::new(&source);
         let parsed = lllang_syntax::parse(&source);
-        let path = uri.path().to_string();
+        let path = uri_to_path(&uri);
         let name = path.rsplit('/').next().unwrap_or("");
-        let sema = if name != "Package.ll" && name != "Solution.ll" {
-            Some(lllang_sema::analyze(&[(path, source.clone())]))
+        let (sema, package_sources) = if name == "Package.ll" || name == "Solution.ll" {
+            (None, HashMap::from([(path.clone(), source.clone())]))
         } else {
-            None
+            let units = collect_package_units(&path, &source);
+            let package_sources: HashMap<String, String> = units.iter().cloned().collect();
+            (Some(lllang_sema::analyze(&units)), package_sources)
         };
         Self {
             uri,
@@ -39,10 +43,22 @@ impl AnalyzedDocument {
             map,
             parsed,
             sema,
+            package_sources,
         }
     }
 
+    fn map_for(&self, file: &str) -> SourceMap {
+        if file == self.uri.path() || file == uri_to_path(&self.uri) {
+            return SourceMap::new(&self.source);
+        }
+        if let Some(src) = self.package_sources.get(file) {
+            return SourceMap::new(src);
+        }
+        SourceMap::new(&self.source)
+    }
+
     pub fn lsp_diagnostics(&self) -> Vec<LspDiagnostic> {
+        let path = uri_to_path(&self.uri);
         let mut out: Vec<LspDiagnostic> = self
             .parsed
             .diagnostics
@@ -51,6 +67,10 @@ impl AnalyzedDocument {
             .collect();
         if let Some(sema) = &self.sema {
             for d in &sema.diagnostics {
+                let diag_file = d.file.as_deref().unwrap_or(path.as_str());
+                if diag_file != path.as_str() && diag_file != self.uri.path() {
+                    continue;
+                }
                 out.push(diagnostic_to_lsp(d, &self.map));
             }
         }
@@ -60,16 +80,18 @@ impl AnalyzedDocument {
     pub fn goto_definition(&self, position: Position) -> Option<Location> {
         let sema = self.sema.as_ref()?;
         let offset = position_to_offset(&self.source, position);
-        let path = self.uri.path();
-        let def = lllang_sema::resolve_at(sema, path, offset)?;
-        let uri = if def.file == path {
+        let path = uri_to_path(&self.uri);
+        let def = lllang_sema::resolve_at(sema, &path, offset)
+            .or_else(|| lllang_sema::resolve_at(sema, self.uri.path(), offset))?;
+        let uri = if def.file == path || def.file == self.uri.path() {
             self.uri.clone()
         } else {
             Url::from_file_path(&def.file).ok()?
         };
+        let map = self.map_for(&def.file);
         Some(Location {
             uri,
-            range: span_to_range(def.def_span, &self.map),
+            range: span_to_range(def.def_span, &map),
         })
     }
 
@@ -78,13 +100,15 @@ impl AnalyzedDocument {
             return vec![];
         };
         let offset = position_to_offset(&self.source, position);
-        let path = self.uri.path();
-        let Some(def) = lllang_sema::resolve_at(sema, path, offset) else {
+        let path = uri_to_path(&self.uri);
+        let Some(def) = lllang_sema::resolve_at(sema, &path, offset)
+            .or_else(|| lllang_sema::resolve_at(sema, self.uri.path(), offset))
+        else {
             return vec![];
         };
         let mut locs = Vec::new();
         for (file, span) in sema.index.all_spans_for(def.id) {
-            let uri = if file == path {
+            let uri = if file == path || file == self.uri.path() {
                 self.uri.clone()
             } else {
                 match Url::from_file_path(&file) {
@@ -92,9 +116,10 @@ impl AnalyzedDocument {
                     Err(_) => continue,
                 }
             };
+            let map = self.map_for(&file);
             locs.push(Location {
                 uri,
-                range: span_to_range(span, &self.map),
+                range: span_to_range(span, &map),
             });
         }
         locs
@@ -103,18 +128,20 @@ impl AnalyzedDocument {
     pub fn rename(&self, position: Position, new_name: String) -> Option<WorkspaceEdit> {
         let sema = self.sema.as_ref()?;
         let offset = position_to_offset(&self.source, position);
-        let path = self.uri.path();
-        let def = lllang_sema::resolve_at(sema, path, offset)?;
+        let path = uri_to_path(&self.uri);
+        let def = lllang_sema::resolve_at(sema, &path, offset)
+            .or_else(|| lllang_sema::resolve_at(sema, self.uri.path(), offset))?;
         let edits = lllang_sema::rename_edits(sema, def.id, &new_name);
         let mut map: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for e in edits {
-            let uri = if e.file == path {
+            let uri = if e.file == path || e.file == self.uri.path() {
                 self.uri.clone()
             } else {
                 Url::from_file_path(&e.file).ok()?
             };
+            let sm = self.map_for(&e.file);
             map.entry(uri).or_default().push(TextEdit {
-                range: span_to_range(e.span, &self.map),
+                range: span_to_range(e.span, &sm),
                 new_text: e.new_text,
             });
         }
@@ -128,8 +155,8 @@ impl AnalyzedDocument {
         let Some(sema) = &self.sema else {
             return vec![];
         };
-        let path = self.uri.path();
-        lllang_sema::inlay_hints_for(sema, path)
+        let path = uri_to_path(&self.uri);
+        lllang_sema::inlay_hints_for(sema, &path)
             .into_iter()
             .map(|h| {
                 let pos = offset_to_position(&self.source, h.after.end as usize);
@@ -179,9 +206,35 @@ impl AnalyzedDocument {
     pub fn hover_text(&self, position: Position) -> Option<String> {
         let offset = position_to_offset(&self.source, position);
         if let Some(sema) = &self.sema {
-            if let Some(def) = lllang_sema::resolve_at(sema, self.uri.path(), offset) {
+            let path = uri_to_path(&self.uri);
+            if let Some(def) = lllang_sema::resolve_at(sema, &path, offset)
+                .or_else(|| lllang_sema::resolve_at(sema, self.uri.path(), offset))
+            {
                 let ty = def.ty.as_deref().unwrap_or("?");
-                return Some(format!("**{}** `{}`: `{}`", format!("{:?}", def.kind).to_lowercase(), def.name, ty));
+                let mut text = format!(
+                    "**{}** `{}`: `{}`",
+                    format!("{:?}", def.kind).to_lowercase(),
+                    def.name,
+                    ty
+                );
+                // Surface `throws` from HIR when the indexed type string omitted it.
+                if let Some(f) = sema.module.functions.iter().find(|f| {
+                    f.name == def.name || f.name.ends_with(&format!(".{}", def.name))
+                }) {
+                    if let Some(e) = &f.throws {
+                        if !ty.contains("throws(") {
+                            text.push_str(&format!("\n\nthrows `{}`", e.display()));
+                        }
+                    }
+                }
+                if let Some(msg) = &def.deprecated {
+                    if msg.is_empty() {
+                        text.push_str("\n\n**deprecated**");
+                    } else {
+                        text.push_str(&format!("\n\n**deprecated**: {msg}"));
+                    }
+                }
+                return Some(text);
             }
         }
         let word = word_at(&self.source, offset)?;
@@ -201,7 +254,8 @@ impl AnalyzedDocument {
         use tower_lsp::lsp_types::CompletionItemKind;
         let offset = position_to_offset(&self.source, position);
         if let Some(sema) = &self.sema {
-            let items = lllang_sema::completions_at(sema, self.uri.path(), &self.source, offset);
+            let path = uri_to_path(&self.uri);
+            let items = lllang_sema::completions_at(sema, &path, &self.source, offset);
             if !items.is_empty() {
                 return items
                     .into_iter()
@@ -234,36 +288,182 @@ impl AnalyzedDocument {
         items
     }
 
-    /// Quick fixes for known diagnostic codes (Phase 4 MVP: LL2005 insert `try `).
+    /// Quick fixes for common LL200x / LL3001 diagnostics (try, override, casts, empty arrays).
     pub fn code_actions(&self, range: Range) -> Vec<(String, TextEdit)> {
         let mut out = Vec::new();
         let Some(sema) = &self.sema else {
             return out;
         };
         for d in &sema.diagnostics {
-            if d.code != "LL2005" {
+            let dr = span_to_range(d.span, &self.map);
+            if !diag_applies(range, dr) {
                 continue;
             }
-            let dr = span_to_range(d.span, &self.map);
-            if !ranges_overlap(range, dr) && range != dr {
-                // Also accept if cursor is inside diagnostic range
-                if !range_contains(dr, range.start) {
-                    continue;
+            match d.code.as_str() {
+                "LL2005" if d.message.contains("requires `try`") => {
+                    out.push((
+                        "Insert `try`".into(),
+                        TextEdit {
+                            range: Range {
+                                start: dr.start,
+                                end: dr.start,
+                            },
+                            new_text: "try ".into(),
+                        },
+                    ));
                 }
+                "LL2000" if d.message.contains("mark it `override`") => {
+                    if let Some(edit) = insert_override(&self.source, d.span) {
+                        out.push(("Add `override`".into(), edit));
+                    }
+                }
+                "LL2002" if d.message.contains("cannot cast") => {
+                    if let Some(edit) = rewrite_cast_op(&self.source, d.span, "as?") {
+                        out.push(("Change `as` to `as?`".into(), edit));
+                    }
+                    if let Some(edit) = rewrite_cast_op(&self.source, d.span, "as!") {
+                        out.push(("Change `as` to `as!`".into(), edit));
+                    }
+                }
+                "LL3001" if d.message.contains("empty array literals") => {
+                    if let Some(edit) = annotate_empty_array(&self.source, d.span) {
+                        out.push(("Annotate as `[Int]`".into(), edit));
+                    }
+                }
+                _ => {}
             }
-            out.push((
-                "Insert `try`".into(),
-                TextEdit {
-                    range: Range {
-                        start: dr.start,
-                        end: dr.start,
-                    },
-                    new_text: "try ".into(),
-                },
-            ));
         }
         out
     }
+}
+
+fn diag_applies(cursor: Range, diag: Range) -> bool {
+    ranges_overlap(cursor, diag) || cursor == diag || range_contains(diag, cursor.start)
+}
+
+/// Insert `override ` immediately before `func` in the diagnostic span.
+fn insert_override(source: &str, span: Span) -> Option<TextEdit> {
+    let start = span.start as usize;
+    let end = (span.end as usize).min(source.len());
+    let slice = source.get(start..end)?;
+    if slice.contains("override") {
+        return None;
+    }
+    let rel = slice.find("func")?;
+    let abs = start + rel;
+    let pos = offset_to_position(source, abs);
+    Some(TextEdit {
+        range: Range {
+            start: pos,
+            end: pos,
+        },
+        new_text: "override ".into(),
+    })
+}
+
+/// Rewrite the cast operator (` as ` → ` as? ` / ` as! `) inside the diagnostic span.
+fn rewrite_cast_op(source: &str, span: Span, new_op: &str) -> Option<TextEdit> {
+    let start = span.start as usize;
+    let end = (span.end as usize).min(source.len());
+    let slice = source.get(start..end)?;
+    // Prefer spaced ` as `; fall back to bare `as` between tokens.
+    let (rel, len) = if let Some(i) = slice.find(" as ") {
+        (i + 1, 2) // replace `as` inside ` as `
+    } else if let Some(i) = slice.find(" as?") {
+        if new_op == "as?" {
+            return None;
+        }
+        (i + 1, 3)
+    } else if let Some(i) = slice.find(" as!") {
+        if new_op == "as!" {
+            return None;
+        }
+        (i + 1, 3)
+    } else {
+        let i = slice.find("as")?;
+        (i, 2)
+    };
+    let abs = start + rel;
+    Some(TextEdit {
+        range: Range {
+            start: offset_to_position(source, abs),
+            end: offset_to_position(source, abs + len),
+        },
+        new_text: new_op.into(),
+    })
+}
+
+/// For `let xs = []`, insert `: [Int]` before `=`.
+fn annotate_empty_array(source: &str, span: Span) -> Option<TextEdit> {
+    let start = span.start as usize;
+    // Walk back over whitespace to find `=`.
+    let bytes = source.as_bytes();
+    let mut i = start;
+    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+        i -= 1;
+    }
+    if i == 0 || bytes[i - 1] != b'=' {
+        return None;
+    }
+    let eq = i - 1;
+    // Already annotated? look for `:` between binding and `=`.
+    let line_start = source[..eq].rfind('\n').map(|p| p + 1).unwrap_or(0);
+    let before = &source[line_start..eq];
+    if before.contains(':') {
+        return None;
+    }
+    let pos = offset_to_position(source, eq);
+    Some(TextEdit {
+        range: Range {
+            start: pos,
+            end: pos,
+        },
+        new_text: ": [Int] ".into(),
+    })
+}
+
+fn uri_to_path(uri: &Url) -> String {
+    uri.to_file_path()
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| uri.path().to_string())
+}
+
+/// Collect package sources for analysis (same discovery as `lang check`), overlaying
+/// the open buffer. Falls back to the single buffer when no package root is found.
+fn collect_package_units(open_path: &str, open_source: &str) -> Vec<(String, String)> {
+    let path = std::path::Path::new(open_path);
+    let Some(root) = lllang_manifest::find_package_root(path) else {
+        return vec![(open_path.to_string(), open_source.to_string())];
+    };
+    let Ok(manifest) = lllang_manifest::load_package(&root.join("Package.ll")) else {
+        return vec![(open_path.to_string(), open_source.to_string())];
+    };
+    let Ok(sources) = lllang_manifest::discover_sources(&root, &manifest) else {
+        return vec![(open_path.to_string(), open_source.to_string())];
+    };
+    let mut units = Vec::new();
+    let mut saw_open = false;
+    for s in sources {
+        let key = s.display().to_string();
+        let name = s.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name == "Package.ll" || name == "Solution.ll" {
+            continue;
+        }
+        if key == open_path || s.as_path() == path {
+            units.push((open_path.to_string(), open_source.to_string()));
+            saw_open = true;
+        } else if let Ok(text) = std::fs::read_to_string(&s) {
+            units.push((key, text));
+        }
+    }
+    if !saw_open {
+        units.push((open_path.to_string(), open_source.to_string()));
+    }
+    if units.is_empty() {
+        units.push((open_path.to_string(), open_source.to_string()));
+    }
+    units
 }
 
 fn ranges_overlap(a: Range, b: Range) -> bool {
@@ -385,6 +585,7 @@ fn is_keyword(w: &str) -> bool {
 
 fn access_label(a: Option<Access>) -> &'static str {
     match a {
+        Some(Access::Open) => "open ",
         Some(Access::Public) => "public ",
         Some(Access::Private) => "private ",
         Some(Access::Protected) => "protected ",
@@ -452,7 +653,9 @@ fn decl_symbols(decl: &Decl, map: &SourceMap) -> Vec<DocumentSymbol> {
             SymbolKind::NAMESPACE,
             map,
         )],
-        Decl::Import(_) | Decl::Extension(_) | Decl::Attribute(_) => vec![],
+        Decl::Import(_) | Decl::Extension(_) | Decl::Attribute(_) | Decl::CompileDeclare { .. } => {
+            vec![]
+        }
     }
 }
 
@@ -588,6 +791,7 @@ fn decl_span(d: &Decl) -> Span {
         Decl::Var(v) => v.span,
         Decl::Const(c) => c.span,
         Decl::Attribute(a) => a.span,
+        Decl::CompileDeclare { span, .. } => *span,
     }
 }
 

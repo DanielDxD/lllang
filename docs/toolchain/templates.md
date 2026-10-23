@@ -1,13 +1,17 @@
 # Project templates
 
-`lang new <template> -n <name>` scaffolds a directory with `Package.ll`, starter `.ll` sources, and optional CI/editor files. Templates align with [manifest](manifest.md) conventions and [project anatomy](../getting-started/project-anatomy.md).
+`lang new <template> -n <name>` scaffolds a directory with `Package.ll`, starter `.ll` sources, and skeleton files (`.gitignore`, `.editorconfig`, `README.md`, `.github/workflows/ci.yml`). Templates are **embedded in the `lang` binary** and expand `{{name}}`, `{{Name}}`, and `{{package}}`.
+
+Phase 7 MVP uses Phase 6 builtins (`Args`, `File`, `Std.Llm` mocks) — not a full `Std.Cli` parser or HTTP listen socket (those land with Phase 8 stdlib).
 
 Global options:
 
 ```bash
-lang new <template> -n NAME [--path DIR] [--no-git]
-lang new solution -n NAME [--path DIR]   # monorepo scaffold
+lang new <template> -n NAME [-o DIR | --path DIR] [--no-git]
+lang new solution -n NAME [-o DIR]   # monorepo scaffold
 ```
+
+`--no-git` skips `git init` (default is to initialize a repo when `git` is available).
 
 ---
 
@@ -95,7 +99,7 @@ public struct Placeholder(message: String)
 
 ## `cli`
 
-Command-line tool with argument parsing (uses `Std.Cli` when available).
+Command-line tool with argument parsing via `Args.count` / `Args.get` (full `Std.Cli` later).
 
 ```text
 mycli/
@@ -141,7 +145,7 @@ public func main(args: [String]) {
 
 ## `web`
 
-Web-oriented layout (HTTP server + static assets).
+Web-oriented layout: path router + `assets/` (no listen socket yet; Phase 8 adds `Std.Net`).
 
 ```text
 myweb/

@@ -1,6 +1,7 @@
 //! LLLang lexer, parser, AST, and syntax diagnostics.
 
 mod ast;
+mod compile_env;
 mod diagnostic;
 mod fmt;
 mod lexer;
@@ -9,6 +10,7 @@ mod span;
 mod token;
 
 pub use ast::*;
+pub use compile_env::{expand_file, CompileEnv, ConstValue};
 pub use diagnostic::{codes as diagnostic_codes, Diagnostic, Severity, SyntaxError};
 pub use fmt::format_source;
 pub use lexer::{lex, Lexer};

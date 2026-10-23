@@ -77,11 +77,12 @@ Once name resolution and types exist:
 
 Diagnostics expand to type errors, unused bindings, and ABI export gaps in libraries.
 
-## Phase 4 capabilities (MVP shipped)
+## Phase 4 / 1.1d capabilities (MVP shipped)
 
-- Type-aware completion: symbols from sema index; members after `.` from HIR + builtins
-- Code action: LL2005 missing `try` → insert `try `
-- Still planned: protocol-constraint completion, code lenses, pull diagnostics, `llm/explain`
+- Type-aware completion: symbols from sema index; members after `.` from HIR + builtins **and extension methods**
+- Hover: type + `throws` + `#deprecated` when indexed
+- Code actions: LL2005 insert `try`; LL2000 add `override`; LL2002 `as` → `as?`/`as!`; LL3001 empty array → annotate `[Int]`
+- Still Later: protocol-constraint completion, code lenses, pull diagnostics, `llm/explain`
 
 ## Multi-root workspaces
 

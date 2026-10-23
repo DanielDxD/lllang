@@ -18,7 +18,9 @@ Arithmetic, comparison, logical, and bitwise operators behave as in C-family lan
 | `?.` `?[]` | Optional chaining |
 | `..<` `...` | Half-open and closed ranges |
 | `is` | Type check with optional binding |
-| `as` | Cast (explicit narrowing) |
+| `as` | Cast (checked / numeric / class) |
+| `as?` | Conditional cast → Optional (nil on failure for classes) |
+| `as!` | Forced cast (traps on class mismatch) |
 
 ```ll
 let len = user?.profile?.name?.count ?? 0
@@ -26,6 +28,9 @@ let slice = items[1..<4]
 if shape is Circle c {
     print(c.radius)
 }
+let n = 3.5 as Int
+let maybe = obj as? Circle
+let forced = obj as! Circle
 ```
 
 Assignment is a statement, not an expression (no chained assignment).

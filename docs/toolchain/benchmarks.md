@@ -1,6 +1,6 @@
 # Benchmarks
 
-Phase 4 MVP: put timed checks under `benches/**/*.ll` and run:
+`lang bench` finds `@Bench` functions under `benches/**/*.ll`, builds a small harness that runs each one for a fixed iteration count, and prints wall-clock milliseconds per bench.
 
 ```bash
 lang bench
@@ -21,8 +21,6 @@ mybench/
   Tests/...
 ```
 
-Mark harness entry points with `@Bench` (documented; the MVP harness typechecks each `benches/*.ll` and reports wall-clock check time).
-
 ## Writing a bench
 
 ```ll
@@ -34,9 +32,15 @@ func twice10() {
 }
 ```
 
-Keep bench files self-contained (or analyze the whole package) so `lang bench` typechecks cleanly.
+Bench sources are analyzed together with package library sources (same discovery as `lang check`, excluding `Tests/` and `benches/` from the lib set, then adding all `benches/*.ll`). The generated harness lives under `.lang/bench/` and is linked like a normal debug binary.
 
-Full timed execution of native binaries (like Criterion-style harnesses) is future work; today `lang bench` validates that bench sources analyze cleanly and reports timing for the check itself.
+Example output:
+
+```text
+     Running 1 bench
+twice10: 12 ms (200 iters)
+    Finished 1 bench in 0.15s
+```
 
 ## See also
 

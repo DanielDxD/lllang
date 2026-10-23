@@ -52,7 +52,15 @@ impl Parser {
     }
 
     fn parse_top_level_decl(&mut self) -> Option<Decl> {
-        let attrs = self.parse_attributes();
+        if self.check_kind(&TokenKind::Hash) {
+            if let Some(TokenKind::Ident(name)) = self.tokens.get(self.pos + 1).map(|t| &t.kind) {
+                if name == "declare" {
+                    return Some(self.parse_hash_declare_decl());
+                }
+            }
+        }
+        let mut attrs = self.parse_hash_decl_directives();
+        attrs.extend(self.parse_attributes());
         let access = self.parse_access();
         if self.check_kind(&TokenKind::Namespace) {
             return Some(Decl::Namespace(self.parse_namespace(attrs)));
@@ -68,7 +76,10 @@ impl Parser {
             return Some(Decl::Func(self.parse_func(attrs, access, is_async)));
         }
         if self.check_kind(&TokenKind::Let) {
-            return Some(Decl::Let(self.parse_let_decl(attrs, access)));
+            return Some(Decl::Let(self.parse_let_decl(attrs, access, is_async)));
+        }
+        if is_async {
+            self.error_expected("`func` or `let` after `async`", self.current_span());
         }
         if self.check_kind(&TokenKind::Var) {
             return Some(Decl::Var(self.parse_var_decl(attrs, access, ParamModifiers::default())));
@@ -80,8 +91,23 @@ impl Parser {
             let d = self.parse_struct(attrs, access);
             return Some(Decl::Struct(d));
         }
-        if self.check_kind(&TokenKind::Class) {
-            return Some(Decl::Class(self.parse_class(attrs, access)));
+        let is_abstract_type = self.eat_kind(&TokenKind::Abstract);
+        let is_sealed_type = self.eat_kind(&TokenKind::Sealed);
+        if self.check_kind(&TokenKind::Class) || self.check_kind(&TokenKind::Actor) {
+            return Some(Decl::Class(self.parse_class(
+                attrs,
+                access,
+                is_abstract_type,
+                is_sealed_type,
+            )));
+        }
+        if is_abstract_type || is_sealed_type {
+            // Recover: modifiers without class/actor.
+            self.error(
+                "LL0001",
+                "expected `class` or `actor` after abstract/sealed",
+                self.current_span(),
+            );
         }
         if self.check_kind(&TokenKind::Enum) {
             return Some(Decl::Enum(self.parse_enum(attrs, access)));
@@ -168,9 +194,20 @@ impl Parser {
         }
     }
 
-    fn parse_class(&mut self, attrs: Vec<Attribute>, access: Option<Access>) -> ClassDecl {
+    fn parse_class(
+        &mut self,
+        attrs: Vec<Attribute>,
+        access: Option<Access>,
+        is_abstract: bool,
+        is_sealed: bool,
+    ) -> ClassDecl {
         let start = self.current_span().start;
-        self.expect_kind(&TokenKind::Class);
+        let is_actor = self.check_kind(&TokenKind::Actor);
+        if is_actor {
+            self.bump();
+        } else {
+            self.expect_kind(&TokenKind::Class);
+        }
         let name = self.parse_ident();
         let generics = self.parse_generic_params();
         let primary_ctor = self.parse_primary_params();
@@ -181,6 +218,9 @@ impl Parser {
             span: span_from(start, self.prev_span()),
             attrs,
             access,
+            is_abstract,
+            is_sealed,
+            is_actor,
             name,
             generics,
             primary_ctor,
@@ -340,7 +380,8 @@ impl Parser {
     }
 
     fn parse_member_decl(&mut self) -> Option<MemberDecl> {
-        let attrs = self.parse_attributes();
+        let mut attrs = self.parse_hash_decl_directives();
+        attrs.extend(self.parse_attributes());
         let access = self.parse_access();
         if self.check_kind(&TokenKind::Deinit) {
             let start = self.current_span().start;
@@ -358,29 +399,67 @@ impl Parser {
         let is_override = self.eat_kind(&TokenKind::Override);
         let is_virtual = self.eat_kind(&TokenKind::Virtual);
         let is_abstract = self.eat_kind(&TokenKind::Abstract);
-        let _is_sealed = self.eat_kind(&TokenKind::Sealed);
+        let is_sealed = self.eat_kind(&TokenKind::Sealed);
         if self.check_kind(&TokenKind::Func) {
             let mut f = self.parse_func(attrs, access, is_async);
             f.is_override = f.is_override || is_override;
             f.is_virtual = f.is_virtual || is_virtual;
             f.is_abstract = f.is_abstract || is_abstract;
+            f.is_sealed = f.is_sealed || is_sealed;
             return Some(MemberDecl::Func(f));
         }
+        // `public weak var` / `unowned let` — modifiers precede storage keyword.
+        // `public private(set) var` — setter narrower than getter (ADR 009).
+        let setter_access = self.parse_setter_access();
+        let mods = self.parse_var_modifiers();
         if self.check_kind(&TokenKind::Let) {
-            return Some(MemberDecl::Let(self.parse_let_decl(attrs, access)));
+            return Some(MemberDecl::Let(self.parse_let_decl(attrs, access, is_async)));
         }
         if self.check_kind(&TokenKind::Var) {
-            let mods = self.parse_var_modifiers();
-            return Some(MemberDecl::Var(self.parse_var_decl(attrs, access, mods)));
+            let mut v = self.parse_var_decl(attrs, access, mods);
+            v.setter_access = setter_access;
+            return Some(MemberDecl::Var(v));
         }
         if self.check_kind(&TokenKind::Struct)
             || self.check_kind(&TokenKind::Class)
+            || self.check_kind(&TokenKind::Actor)
             || self.check_kind(&TokenKind::Enum)
             || self.check_kind(&TokenKind::Protocol)
         {
             if let Some(d) = self.parse_top_level_decl() {
                 return Some(MemberDecl::Nested(Box::new(d)));
             }
+        }
+        // Custom `subscript` / `operator` — grammar tokens exist; declarations are Later (ADR/ROADMAP).
+        if self.check_kind(&TokenKind::Subscript) || self.check_kind(&TokenKind::Operator) {
+            let span = self.current_span();
+            let kind = if self.check_kind(&TokenKind::Subscript) {
+                "subscript"
+            } else {
+                "operator"
+            };
+            self.bump();
+            self.error(
+                "LL3001",
+                format!(
+                    "custom `{kind}` declarations are not implemented yet (deferred to Later)"
+                ),
+                span,
+            );
+            // Skip until next member-ish boundary.
+            while !self.check_kind(&TokenKind::Eof)
+                && !self.check_kind(&TokenKind::RBrace)
+                && !self.check_kind(&TokenKind::Func)
+                && !self.check_kind(&TokenKind::Var)
+                && !self.check_kind(&TokenKind::Let)
+            {
+                if self.check_kind(&TokenKind::LBrace) {
+                    let _ = self.parse_block();
+                    break;
+                }
+                self.bump();
+            }
+            return None;
         }
         if !attrs.is_empty() || access.is_some() || is_async || is_override || is_virtual || is_abstract {
             self.error_expected("member declaration", self.current_span());
@@ -417,6 +496,7 @@ impl Parser {
         let is_override = self.eat_kind(&TokenKind::Override);
         let is_virtual = self.eat_kind(&TokenKind::Virtual);
         let is_abstract = self.eat_kind(&TokenKind::Abstract);
+        let is_sealed = self.eat_kind(&TokenKind::Sealed);
         self.expect_kind(&TokenKind::Func);
         let name = self.parse_ident();
         let generics = self.parse_generic_params();
@@ -434,6 +514,7 @@ impl Parser {
             is_override,
             is_virtual,
             is_abstract,
+            is_sealed,
             name,
             generics,
             params,
@@ -457,7 +538,12 @@ impl Parser {
         FuncBody::Missing
     }
 
-    fn parse_let_decl(&mut self, attrs: Vec<Attribute>, access: Option<Access>) -> LetDecl {
+    fn parse_let_decl(
+        &mut self,
+        attrs: Vec<Attribute>,
+        access: Option<Access>,
+        is_async: bool,
+    ) -> LetDecl {
         let start = self.current_span().start;
         self.expect_kind(&TokenKind::Let);
         let bindings = self.parse_pattern_bindings();
@@ -466,6 +552,7 @@ impl Parser {
             span: span_from(start, self.prev_span()),
             attrs,
             access,
+            is_async,
             bindings,
         }
     }
@@ -479,13 +566,91 @@ impl Parser {
         let start = self.current_span().start;
         self.expect_kind(&TokenKind::Var);
         let bindings = self.parse_pattern_bindings();
+        let mut computed = None;
+        let mut will_set = None;
+        let mut did_set = None;
+        // Computed: `=> expr` or `{ get … set … }` when no stored initializer.
+        let has_init = bindings.iter().any(|b| b.initializer.is_some());
+        if !has_init && bindings.len() == 1 {
+            if self.eat_kind(&TokenKind::FatArrow) {
+                computed = Some(ComputedBody::Arrow(Box::new(self.parse_expr())));
+            } else if self.check_kind(&TokenKind::LBrace)
+                && (self.peek_kind_is(1, &TokenKind::Get)
+                    || self.peek_kind_is(1, &TokenKind::Set)
+                    || self.peek_kind_is(1, &TokenKind::WillSet)
+                    || self.peek_kind_is(1, &TokenKind::DidSet))
+            {
+                computed = Some(self.parse_computed_accessors());
+            }
+        }
+        if computed.is_none() {
+            will_set = self.parse_property_observer(TokenKind::WillSet);
+            did_set = self.parse_property_observer(TokenKind::DidSet);
+        }
         self.eat_kind(&TokenKind::Semicolon);
         VarDecl {
             span: span_from(start, self.prev_span()),
             attrs,
             access,
+            setter_access: None,
             modifiers,
             bindings,
+            computed,
+            will_set,
+            did_set,
+        }
+    }
+
+    fn parse_property_observer(&mut self, kind: TokenKind) -> Option<PropertyObserver> {
+        if !self.check_kind(&kind) {
+            return None;
+        }
+        let start = self.current_span().start;
+        self.bump();
+        let param_name = if self.eat_kind(&TokenKind::LParen) {
+            let n = self.parse_ident();
+            self.expect_kind(&TokenKind::RParen);
+            Some(n)
+        } else {
+            None
+        };
+        let body = self.parse_block();
+        Some(PropertyObserver {
+            span: span_from(start, self.prev_span()),
+            param_name,
+            body,
+        })
+    }
+
+    fn parse_computed_accessors(&mut self) -> ComputedBody {
+        self.expect_kind(&TokenKind::LBrace);
+        let mut getter = None;
+        let mut setter = None;
+        while !self.check_kind(&TokenKind::RBrace) && !self.check_kind(&TokenKind::Eof) {
+            if self.eat_kind(&TokenKind::Get) {
+                getter = Some(self.parse_block());
+            } else if self.eat_kind(&TokenKind::Set) {
+                let param = if self.eat_kind(&TokenKind::LParen) {
+                    let n = self.parse_ident();
+                    self.expect_kind(&TokenKind::RParen);
+                    Some(n)
+                } else {
+                    None
+                };
+                let body = self.parse_block();
+                setter = Some((param, body));
+            } else {
+                self.error_expected("`get` or `set`", self.current_span());
+                self.bump();
+            }
+        }
+        self.expect_kind(&TokenKind::RBrace);
+        ComputedBody::Accessors {
+            getter: getter.unwrap_or_else(|| Block {
+                span: Span::EMPTY,
+                stmts: vec![],
+            }),
+            setter,
         }
     }
 
@@ -650,9 +815,14 @@ impl Parser {
             return None;
         }
         let start = self.current_span().start;
+        let stmt_async = self.eat_kind(&TokenKind::Async);
         if self.check_kind(&TokenKind::Let) {
-            let decl = self.parse_let_decl(Vec::new(), None);
+            let decl = self.parse_let_decl(Vec::new(), None, stmt_async);
             return Some(Stmt::Let(decl));
+        }
+        if stmt_async {
+            self.error_expected("`let` after `async` in statement position", self.current_span());
+            return None;
         }
         if self.check_kind(&TokenKind::Var) {
             let mods = self.parse_var_modifiers();
@@ -732,12 +902,30 @@ impl Parser {
         }
         if self.check_kind(&TokenKind::Defer) {
             self.bump();
-            let body = self.parse_block();
+            let body = DeferBody::Block(self.parse_block());
             self.eat_kind(&TokenKind::Semicolon);
             return Some(Stmt::Defer {
                 span: span_from(start, self.prev_span()),
                 body,
             });
+        }
+        if self.check_kind(&TokenKind::Hash) {
+            return self.parse_hash_directive(start);
+        }
+        // `@run expr` fire-and-forget (Phase 10).
+        if self.check_kind(&TokenKind::At) {
+            let attrs = self.parse_attributes();
+            if attrs.iter().any(|a| a.name == "run") {
+                let expr = self.parse_expr();
+                self.eat_kind(&TokenKind::Semicolon);
+                return Some(Stmt::Run {
+                    span: span_from(start, self.prev_span()),
+                    expr,
+                });
+            }
+            // Unknown @attr at statement position — fall through as error recovery.
+            self.error_expected("statement after attribute", self.current_span());
+            return None;
         }
         if self.check_kind(&TokenKind::LBrace) {
             return Some(Stmt::Block(self.parse_block()));
@@ -751,6 +939,135 @@ impl Parser {
             });
         }
         None
+    }
+
+    fn parse_hash_directive(&mut self, start: u32) -> Option<Stmt> {
+        self.expect_kind(&TokenKind::Hash);
+        // Allow `# defer` with whitespace (Ident) or glued `#defer` as Ident after Hash.
+        // `#if` uses the `If` keyword token.
+        let dir = if let TokenKind::Ident(name) = self.current_kind().clone() {
+            self.bump();
+            name
+        } else if self.check_kind(&TokenKind::Defer) {
+            self.bump();
+            "defer".into()
+        } else if self.check_kind(&TokenKind::If) {
+            self.bump();
+            "if".into()
+        } else {
+            self.error_expected("directive name after `#`", self.current_span());
+            return None;
+        };
+        match dir.as_str() {
+            "defer" => {
+                let body = if self.check_kind(&TokenKind::LBrace) {
+                    DeferBody::Block(self.parse_block())
+                } else {
+                    let expr = self.parse_expr();
+                    self.eat_kind(&TokenKind::Semicolon);
+                    DeferBody::Expr(expr)
+                };
+                Some(Stmt::Defer {
+                    span: span_from(start, self.prev_span()),
+                    body,
+                })
+            }
+            "die" => {
+                let message = if let TokenKind::String(s) = self.current_kind().clone() {
+                    self.bump();
+                    s
+                } else {
+                    self.error_expected("string message after `#die`", self.current_span());
+                    String::new()
+                };
+                self.eat_kind(&TokenKind::Semicolon);
+                Some(Stmt::Die {
+                    span: span_from(start, self.prev_span()),
+                    message,
+                })
+            }
+            "if" => Some(self.parse_hash_if(start)),
+            "declare" => {
+                self.error(
+                    codes::UNEXPECTED_TOKEN,
+                    "`#declare` is only allowed at file scope",
+                    span_from(start, self.current_span()),
+                );
+                // Consume `$NAME lit` to recover.
+                let _ = self.parse_hash_declare_after_hash(start);
+                None
+            }
+            other => {
+                self.error(
+                    codes::UNEXPECTED_TOKEN,
+                    format!("unknown directive `#{other}`"),
+                    span_from(start, self.prev_span()),
+                );
+                None
+            }
+        }
+    }
+
+    fn parse_hash_if(&mut self, start: u32) -> Stmt {
+        // `#` and `if` already consumed by caller... wait, caller already bumped both.
+        let condition = self.parse_compile_const_or_expr();
+        let then_body = self.parse_block();
+        let else_body = if self.eat_kind(&TokenKind::Else) {
+            Some(self.parse_block())
+        } else {
+            None
+        };
+        Stmt::CompileIf {
+            span: span_from(start, self.prev_span()),
+            condition,
+            then_body,
+            else_body,
+        }
+    }
+
+    fn parse_compile_const_or_expr(&mut self) -> Expr {
+        if let TokenKind::DollarIdent(name) = self.current_kind().clone() {
+            let span = self.current_span();
+            self.bump();
+            return Expr::CompileConst { span, name };
+        }
+        self.parse_expr()
+    }
+
+    fn parse_hash_declare_decl(&mut self) -> Decl {
+        let start = self.current_span().start;
+        self.expect_kind(&TokenKind::Hash);
+        self.parse_hash_declare_after_hash(start)
+    }
+
+    fn parse_hash_declare_after_hash(&mut self, start: u32) -> Decl {
+        // Expect `declare` (already may be current after Hash bumped in directive path).
+        if let TokenKind::Ident(n) = self.current_kind().clone() {
+            if n == "declare" {
+                self.bump();
+            }
+        }
+        let name = if let TokenKind::DollarIdent(n) = self.current_kind().clone() {
+            self.bump();
+            n
+        } else {
+            self.error_expected("`$NAME` after `#declare`", self.current_span());
+            String::new()
+        };
+        let value = if let Some(lit) = self.parse_literal() {
+            lit
+        } else {
+            self.error_expected("literal after `#declare $NAME`", self.current_span());
+            Expr::Error {
+                span: self.current_span(),
+            }
+        };
+        self.eat_kind(&TokenKind::Semicolon);
+        Decl::CompileDeclare {
+            span: span_from(start, self.prev_span()),
+            name,
+            value,
+        }
     }
 
     fn parse_guard_stmt(&mut self, start: u32) -> Stmt {
@@ -890,6 +1207,14 @@ impl Parser {
             return Type::Tuple {
                 span: span_from(start, self.prev_span()),
                 elements,
+            };
+        }
+        if self.eat_kind(&TokenKind::LBracket) {
+            let element = self.parse_type();
+            self.expect_kind(&TokenKind::RBracket);
+            return Type::Array {
+                span: span_from(start, self.prev_span()),
+                element: Box::new(element),
             };
         }
         if self.check_ident_start() {
@@ -1146,19 +1471,66 @@ impl Parser {
         }
     }
 
+    /// `#deprecated "msg"` (and future decl directives) → attributes on the following decl.
+    fn parse_hash_decl_directives(&mut self) -> Vec<Attribute> {
+        let mut attrs = Vec::new();
+        while self.check_kind(&TokenKind::Hash) {
+            let start = self.current_span().start;
+            // Peek directive name without consuming if it's a statement directive.
+            let name = match self.tokens.get(self.pos + 1).map(|t| &t.kind) {
+                Some(TokenKind::Ident(n)) => n.clone(),
+                Some(TokenKind::Defer) => "defer".into(),
+                Some(TokenKind::If) => "if".into(),
+                _ => break,
+            };
+            if name == "defer" || name == "die" || name == "if" || name == "declare" {
+                break;
+            }
+            self.bump(); // Hash
+            self.bump(); // Ident
+            let mut args = Vec::new();
+            if name == "deprecated" {
+                if let TokenKind::String(s) = self.current_kind().clone() {
+                    let span = self.current_span();
+                    self.bump();
+                    args.push(Expr::LiteralString {
+                        span,
+                        parts: vec![StringPart::Text(s)],
+                    });
+                } else {
+                    self.error_expected("string message after `#deprecated`", self.current_span());
+                }
+            }
+            attrs.push(Attribute {
+                span: span_from(start, self.prev_span()),
+                name,
+                args,
+            });
+        }
+        attrs
+    }
+
     fn parse_attributes(&mut self) -> Vec<Attribute> {
         let mut attrs = Vec::new();
         while self.check_kind(&TokenKind::At) {
             let start = self.current_span().start;
             self.bump();
-            let name = self.parse_ident();
+            // Soft-keywords allowed as attribute names (`@throws`).
+            let name = if self.eat_kind(&TokenKind::Throws) {
+                "throws".into()
+            } else {
+                self.parse_ident()
+            };
             let mut args = Vec::new();
             if self.eat_kind(&TokenKind::LParen) {
                 while !self.check_kind(&TokenKind::RParen) {
-                    // Allow labeled attribute args: `description: "..."`.
-                    if self.check_ident_start() && self.peek_kind_is(1, &TokenKind::Colon) {
+                    // Allow labeled attribute args: `parallel: false` or `parallel = false`.
+                    if self.check_ident_start()
+                        && (self.peek_kind_is(1, &TokenKind::Colon)
+                            || self.peek_kind_is(1, &TokenKind::Assign))
+                    {
                         let _label = self.parse_ident();
-                        self.bump(); // Colon
+                        self.bump(); // Colon or Assign
                     }
                     args.push(self.parse_expr());
                     if !self.eat_kind(&TokenKind::Comma) {
@@ -1178,6 +1550,10 @@ impl Parser {
 
     fn parse_access(&mut self) -> Option<Access> {
         match self.current_kind() {
+            TokenKind::Open => {
+                self.bump();
+                Some(Access::Open)
+            }
             TokenKind::Public => {
                 self.bump();
                 Some(Access::Public)
@@ -1200,6 +1576,27 @@ impl Parser {
             }
             _ => None,
         }
+    }
+
+    /// `private(set)` / `fileprivate(set)` / `internal(set)` after a leading access modifier.
+    fn parse_setter_access(&mut self) -> Option<Access> {
+        let setter = match self.current_kind() {
+            TokenKind::Private => Access::Private,
+            TokenKind::Fileprivate => Access::Fileprivate,
+            TokenKind::Internal => Access::Internal,
+            _ => return None,
+        };
+        // Need `access ( set )` — peek without consuming the access if not `(set)`.
+        if !self.peek_kind_is(1, &TokenKind::LParen) {
+            return None;
+        }
+        self.bump(); // private/fileprivate/internal
+        self.expect_kind(&TokenKind::LParen);
+        if !self.eat_kind(&TokenKind::Set) {
+            self.error_expected("`set`", self.current_span());
+        }
+        self.expect_kind(&TokenKind::RParen);
+        Some(setter)
     }
 
     fn parse_var_modifiers(&mut self) -> ParamModifiers {
@@ -1323,11 +1720,13 @@ impl Parser {
         if self.eat_kind(&TokenKind::Try) {
             let start = self.prev_span().start;
             let optional = self.eat_kind(&TokenKind::Question);
+            let force = !optional && self.eat_kind(&TokenKind::Bang);
             let inner = self.parse_try();
             return Expr::Try {
                 span: span_from(start, inner.span()),
                 expr: Box::new(inner),
                 optional,
+                force,
             };
         }
         self.parse_await()
@@ -1438,6 +1837,26 @@ impl Parser {
 
     fn parse_relational(&mut self) -> Expr {
         let mut expr = self.parse_range();
+        // `expr is Type` / `expr is Type name`
+        if self.eat_kind(&TokenKind::Is) {
+            let start = expr.span();
+            let ty = self.parse_type_atom();
+            let binding = if self.check_ident_start() {
+                Some(self.parse_ident())
+            } else {
+                None
+            };
+            let end = binding
+                .as_ref()
+                .map(|_| self.prev_span())
+                .unwrap_or_else(|| ty.span());
+            return Expr::Is {
+                span: start.merge(end),
+                expr: Box::new(expr),
+                ty,
+                binding,
+            };
+        }
         loop {
             let op = if self.eat_kind(&TokenKind::Lt) {
                 BinaryOp::Lt
@@ -1662,6 +2081,14 @@ impl Parser {
                 };
                 continue;
             }
+            if self.eat_kind(&TokenKind::Bang) {
+                let start = expr.span();
+                expr = Expr::ForceUnwrap {
+                    span: start.merge(self.prev_span()),
+                    expr: Box::new(expr),
+                };
+                continue;
+            }
             if self.check_kind(&TokenKind::Catch) {
                 let start = expr.span();
                 let catches = vec![self.parse_catch_clause()];
@@ -1715,10 +2142,11 @@ impl Parser {
             self.pos -= 1;
             return self.parse_closure_or_block_expr();
         }
+        // `(a, b) => expr` — peek before consuming `(`, because `parse_lambda` eats it.
+        if self.check_kind(&TokenKind::LParen) && self.check_lambda() {
+            return self.parse_lambda(start);
+        }
         if self.eat_kind(&TokenKind::LParen) {
-            if self.check_lambda() {
-                return self.parse_lambda(start);
-            }
             let expr = self.parse_expr();
             self.expect_kind(&TokenKind::RParen);
             return Expr::Paren {
@@ -1728,6 +2156,11 @@ impl Parser {
         }
         if let Some(lit) = self.parse_literal() {
             return lit;
+        }
+        if let TokenKind::DollarIdent(name) = self.current_kind().clone() {
+            let span = self.current_span();
+            self.bump();
+            return Expr::CompileConst { span, name };
         }
         // Implicit enum member: `.empty`, `.some(v)`
         if self.eat_kind(&TokenKind::Dot) {
@@ -2135,7 +2568,7 @@ impl Parser {
     }
 
     fn is_top_level_decl_start(&self) -> bool {
-        if self.check_kind(&TokenKind::At) {
+        if self.check_kind(&TokenKind::At) || self.check_kind(&TokenKind::Hash) {
             return true;
         }
         matches!(
@@ -2149,6 +2582,7 @@ impl Parser {
                 | TokenKind::Const
                 | TokenKind::Struct
                 | TokenKind::Class
+                | TokenKind::Actor
                 | TokenKind::Enum
                 | TokenKind::Protocol
                 | TokenKind::Async
@@ -2181,6 +2615,7 @@ impl Parser {
                 | TokenKind::At
                 | TokenKind::Struct
                 | TokenKind::Class
+                | TokenKind::Actor
         )
     }
 
@@ -2203,6 +2638,7 @@ impl Parser {
                     | TokenKind::Minus
                     | TokenKind::Do
                     | TokenKind::Unsafe
+                    | TokenKind::DollarIdent(_)
             )
     }
 
@@ -2457,6 +2893,7 @@ impl SpanExt for Expr {
             | Expr::LiteralNil { span }
             | Expr::LiteralChar { span, .. }
             | Expr::Ident { span, .. }
+            | Expr::CompileConst { span, .. }
             | Expr::SelfExpr { span, .. }
             | Expr::Array { span, .. }
             | Expr::Dictionary { span, .. }
@@ -2473,8 +2910,10 @@ impl SpanExt for Expr {
             | Expr::Try { span, .. }
             | Expr::Await { span, .. }
             | Expr::Cast { span, .. }
+            | Expr::Is { span, .. }
             | Expr::Ternary { span, .. }
             | Expr::NilCoalesce { span, .. }
+            | Expr::ForceUnwrap { span, .. }
             | Expr::Range { span, .. }
             | Expr::DoCatch { span, .. }
             | Expr::Catch { span, .. }

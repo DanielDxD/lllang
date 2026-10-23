@@ -127,7 +127,7 @@ fn strip_ty_name(ty: &str) -> String {
         .to_string()
 }
 
-/// Fields and methods for a named type (HIR + builtin members).
+/// Fields and methods for a named type (HIR + builtins + extension methods).
 pub fn members_of(result: &SemaResult, type_name: &str) -> Vec<CompletionItem> {
     let mut out = Vec::new();
     for td in &result.module.types {
@@ -180,9 +180,15 @@ pub fn members_of(result: &SemaResult, type_name: &str) -> Vec<CompletionItem> {
             });
         }
         for m in methods {
+            // HIR methods are mangled as `Owner.name` (includes extension methods).
+            let label = method_label(&m.name, type_name);
+            let detail = match &m.throws {
+                Some(e) => format!("{} throws({})", m.ret.display(), e.display()),
+                None => m.ret.display(),
+            };
             out.push(CompletionItem {
-                label: m.name.clone(),
-                detail: m.ret.display(),
+                label,
+                detail,
                 kind: CompletionKind::Method,
             });
         }
@@ -203,4 +209,12 @@ pub fn members_of(result: &SemaResult, type_name: &str) -> Vec<CompletionItem> {
     out.sort_by(|a, b| a.label.cmp(&b.label));
     out.dedup_by(|a, b| a.label == b.label);
     out
+}
+
+fn method_label(mangled: &str, owner: &str) -> String {
+    let prefix = format!("{owner}.");
+    mangled
+        .strip_prefix(&prefix)
+        .unwrap_or_else(|| mangled.rsplit('.').next().unwrap_or(mangled))
+        .to_string()
 }

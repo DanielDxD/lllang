@@ -3,13 +3,52 @@ namespace {{Name}}
 import Std.IO
 import Std.Llm
 
-@tool(description: "Echo the input string")
-public func echo(text: String) -> String {
-    text
+public func listTools() -> String {
+    "tools: echo"
 }
 
-public func main() async throws(LlmError) {
+public func handleLine(line: String) -> String {
+    let trimmed = line.trim()
+    if trimmed == "list" {
+        return listTools()
+    }
+    if trimmed.contains("call echo") {
+        let parts = trimmed.split(" ")
+        if parts.count > 2 {
+            return echo(parts[2])
+        }
+        return echo("")
+    }
+    if trimmed == "quit" || trimmed == "exit" {
+        return "bye"
+    }
+    "unknown command"
+}
+
+/// Default: demo list + echo. Pass `--stdio` for a readLine loop.
+public func main() {
     var tools = ToolRegistry()
     tools.register(echo.self)
-    print("mcp server scaffold — register tools and serve over stdio")
+    let arg1 = switch Args.get(1) {
+        .some(v) => v,
+        .none => "",
+    }
+    if arg1 == "--stdio" {
+        print("mcp ready — commands: list | call echo <text> | quit")
+        while true {
+            let lineOpt = readLine()
+            let line = switch lineOpt {
+                .some(v) => v,
+                .none => "quit",
+            }
+            let out = handleLine(line)
+            print(out)
+            if out == "bye" {
+                break
+            }
+        }
+        return
+    }
+    print(listTools())
+    print(handleLine("call echo ping"))
 }

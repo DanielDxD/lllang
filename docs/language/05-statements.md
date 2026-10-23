@@ -99,11 +99,17 @@ for key in map.keys { ... }
 for g in text.graphemes { ... }
 ```
 
-Ranges:
+Ranges (`..<` half-open, `...` inclusive) and dictionary iteration:
 
 ```ll
 for i in 0..<10 { sum += i }
+for i in 1...3 { print(i) }
+for (k, v) in dict { print("\(k)=\(v)") }
 ```
+
+Dictionary literals and `for (k, v)` are **`[String:String]` only** in this release (keys and values are strings). Array literals support user struct/enum/class elements via pointer arrays.
+
+Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`) desugars to a read-modify-write of the target.
 
 ## Jump statements
 
@@ -123,19 +129,27 @@ for x in items {
 }
 ```
 
-## defer
+## `#defer` and `#die`
 
-`defer` runs at scope exit, LIFO order:
+`#defer` runs at scope exit, LIFO order. Both expression and block forms are supported:
 
 ```ll
 func withLock() throws {
     lock.acquire()
-    defer { lock.release() }
+    #defer lock.release()
+    #defer {
+        lock.release()
+        print("released")
+    }
     try criticalSection()
 }
 ```
 
-`defer` on async functions runs when the synchronous scope ends, not when the async work completes — use `using` patterns for async cleanup where needed.
+`#die "message"` aborts the process immediately (distinct from library `fatalError`).
+
+The legacy keyword form `defer { ... }` is accepted as an alias for `#defer { ... }`.
+
+`#defer` on async functions runs when the synchronous scope ends, not when the async work completes — use `using` patterns for async cleanup where needed.
 
 ## Error handling statements
 
@@ -170,11 +184,11 @@ async func loadAll() {
 }
 ```
 
-`async let` for structured concurrency:
+`async let` for structured concurrency (MVP: zero-arg `async` calls; cancel+join on early exit):
 
 ```ll
-async let img = fetchImage(url)
-async let meta = fetchMeta(url)
+async let img = fetchImage()
+async let meta = fetchMeta()
 let page = Page(await img, await meta)
 ```
 

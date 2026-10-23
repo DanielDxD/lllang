@@ -23,21 +23,33 @@ public struct UnitTestParallel {
     @test("string emptiness")
     public func testEmpty() {
         @empty("")
-        @notEmpty("")
+        @notEmpty("x")
         @contains("hello", "ell")
     }
 }
 
-@suite("Sequential", parallel: false)
+@suite("Sequential", parallel = false)
 public struct UnitTestSequential {
+    @fixture
+    public func prepare() {
+        // Suite-level fixture runs before each @test in this suite.
+        @expect(true)
+    }
+
     @test("negate")
     public func testNegate() {
-        @equal(negate(3), 12)
+        @equal(negate(3), 0 - 3)
         @lte(negate(3), 0)
     }
 
     @test
     public func testApprox() {
         @approx(1.0, 1.0)
+    }
+
+    @throws
+    @test("must throw")
+    public func testThrows() throws(Boom) {
+        try! boom()
     }
 }

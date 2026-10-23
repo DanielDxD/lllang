@@ -1,3 +1,6 @@
-namespace {{Name}}.Tools
+namespace {{Name}}
 
-// Tool implementations can live here; see main.ll for @tool registration.
+@tool(description: "Echo the input string")
+public func echo(text: String) -> String {
+    text
+}

@@ -16,10 +16,10 @@ Published dependencies ship as:
 
 | Artifact | Contents |
 |----------|----------|
-| **`.bll`** | Precompiled native library for a specific target (object/archive with LLLang ABI) |
+| **`.bll`** | Portable LLVM bitcode library (BLL v2); finalized to native code for `--target` at link (see [ADR 010](010-portable-bll-multitarget.md)) |
 | **`.sbl`** | Textual stub declarations: public types, functions, attributes, version, ABI hash |
 
-The package manager (`lang add`, lockfile) resolves **versions and targets**, fetches `.bll` + `.sbl`, and links `.bll` during `lang build`. Source for third-party libraries is **not** copied into consumer projects by default.
+The package manager (`lang add`, lockfile) resolves **versions**, fetches one `.bll` + `.sbl`, and **materializes** `.bll` for the active build target during `lang build`. Source for third-party libraries is **not** copied into consumer projects by default.
 
 Authors publish via `lang pack` (Phase 3), uploading artifacts to a registry. Local path overrides may point at source for library development only.
 
@@ -36,7 +36,7 @@ Lockfile (`Package.lock`) records exact package versions, content hashes, and ta
 
 ### Negative
 
-- Library authors must build matrix (macOS arm64/x64, Linux, Windows) or use CI to publish.
+- Library authors publish once (portable bitcode); consumers need a runtime/sysroot for each cross-link target.
 - Debugging into dependency requires separate symbol/debug package or source symbol server (future).
 - Faster iteration during library dev requires path dependency workflow documented in package guide.
 

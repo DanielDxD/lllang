@@ -1,6 +1,6 @@
 # Std.IO
 
-**Std.IO** defines byte and text streams, buffering, and standard handles.
+**Std.IO** defines byte and text streams, buffering, and standard handles. Variadic `any CustomStringConvertible…` print signatures are a design sketch — the MVP `print` / `eprint` accept strings and interpolations.
 
 ```ll
 import Std.IO
@@ -58,8 +58,9 @@ public struct Data: Equatable, Hashable, Sendable {
 ## Print helpers
 
 ```ll
-public func print(_ items: any CustomStringConvertible..., terminator: String = "\n")
-public func eprint(_ items: any CustomStringConvertible..., terminator: String = "\n")
+// MVP: string / interpolation; existential variadics are Later
+public func print(_ message: String)
+public func eprint(_ message: String)
 ```
 
 ## See also

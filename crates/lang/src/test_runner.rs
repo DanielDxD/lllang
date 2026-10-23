@@ -38,6 +38,10 @@ pub struct TestCase {
     pub name: String,
     /// When false, cases in this suite share one sequential worker.
     pub parallel_ok: bool,
+    /// When true, the test must throw; failing to throw fails the test.
+    pub expect_throws: bool,
+    /// Optional suite `@fixture` method invoked before the test body.
+    pub fixture: Option<String>,
     pub call: TestCall,
 }
 
@@ -220,6 +224,8 @@ fn collect_cases(source: &str, decls: &[Decl], cases: &mut Vec<TestCase>, next_i
                         suite: "(root)".into(),
                         name: title,
                         parallel_ok: true,
+                        expect_throws: has_attr(&f.attrs, "throws"),
+                        fixture: None,
                         call: TestCall::Func(f.name.clone()),
                     });
                     *next_id += 1;
@@ -235,13 +241,27 @@ fn collect_suite(source: &str, s: &StructDecl, cases: &mut Vec<TestCase>, next_i
         return;
     };
     let suite_name = string_lit_arg(&suite_attr.args, 0).unwrap_or_else(|| s.name.clone());
-    let parallel_ok = match suite_attr.args.get(1) {
-        Some(Expr::LiteralBool { value: false, .. }) => false,
-        _ => true,
-    };
+    // `parallel: false` / `parallel = false` → a bool arg is false.
+    let parallel_ok = !suite_attr
+        .args
+        .iter()
+        .any(|a| matches!(a, Expr::LiteralBool { value: false, .. }));
+
+    let fixture = s.members.iter().find_map(|m| {
+        if let MemberDecl::Func(f) = m {
+            if has_attr(&f.attrs, "fixture") {
+                return Some(f.name.clone());
+            }
+        }
+        None
+    });
 
     for m in &s.members {
         let MemberDecl::Func(f) = m else { continue };
+        if has_attr(&f.attrs, "fixture") {
+            continue;
+        }
+        let expect_throws = has_attr(&f.attrs, "throws");
         if has_attr(&f.attrs, "theory") {
             let title = attr_title(&f.attrs, &["theory"]).unwrap_or_else(|| f.name.clone());
             let rows = values_rows(source, f);
@@ -251,6 +271,8 @@ fn collect_suite(source: &str, s: &StructDecl, cases: &mut Vec<TestCase>, next_i
                     suite: suite_name.clone(),
                     name: title.clone(),
                     parallel_ok,
+                    expect_throws,
+                    fixture: fixture.clone(),
                     call: TestCall::Method {
                         type_name: s.name.clone(),
                         method: f.name.clone(),
@@ -265,6 +287,8 @@ fn collect_suite(source: &str, s: &StructDecl, cases: &mut Vec<TestCase>, next_i
                         suite: suite_name.clone(),
                         name: format!("{title}[{ri}]"),
                         parallel_ok,
+                        expect_throws,
+                        fixture: fixture.clone(),
                         call: TestCall::Method {
                             type_name: s.name.clone(),
                             method: f.name.clone(),
@@ -281,6 +305,8 @@ fn collect_suite(source: &str, s: &StructDecl, cases: &mut Vec<TestCase>, next_i
                 suite: suite_name.clone(),
                 name: title,
                 parallel_ok,
+                expect_throws,
+                fixture: fixture.clone(),
                 call: TestCall::Method {
                     type_name: s.name.clone(),
                     method: f.name.clone(),
@@ -392,23 +418,34 @@ pub fn emit_harness(plan: &TestPlan) -> String {
 
     for case in &plan.cases {
         out.push_str(&format!("public func __lang_test_job_{}() {{\n", case.id));
+        let mut body = String::new();
         match &case.call {
             TestCall::Func(name) => {
-                out.push_str(&format!("    {name}()\n"));
+                body.push_str(&format!("    {name}()\n"));
             }
             TestCall::Method {
                 type_name,
                 method,
                 args,
             } => {
-                out.push_str(&format!("    let __s = {type_name}()\n"));
+                body.push_str(&format!("    let __s = {type_name}()\n"));
+                if let Some(fixture_name) = &case.fixture {
+                    body.push_str(&format!("    __s.{fixture_name}()\n"));
+                }
+                // `try!` traps on throw (plain `try` does not rethrow in MVP ABI).
+                let try_prefix = if case.expect_throws { "try! " } else { "" };
                 if args.is_empty() {
-                    out.push_str(&format!("    __s.{method}()\n"));
+                    body.push_str(&format!("    {try_prefix}__s.{method}()\n"));
                 } else {
-                    out.push_str(&format!("    __s.{method}({})\n", args.join(", ")));
+                    body.push_str(&format!(
+                        "    {try_prefix}__s.{method}({})\n",
+                        args.join(", ")
+                    ));
                 }
             }
         }
+        // `@throws`: `try` propagates to `main` which traps → non-zero exit; `run_one` inverts.
+        out.push_str(&body);
         out.push_str("}\n\n");
     }
 
@@ -548,7 +585,11 @@ fn run_one(bin: &Path, case: &TestCase) -> Result<bool> {
         .stderr(Stdio::piped())
         .status()
         .with_context(|| format!("spawn {}", bin.display()))?;
-    Ok(status.success())
+    if case.expect_throws {
+        Ok(!status.success())
+    } else {
+        Ok(status.success())
+    }
 }
 
 /// Write harness + return path to harness.ll

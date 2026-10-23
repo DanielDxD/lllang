@@ -29,7 +29,7 @@ Local type inference is intentional: types are inferred where obvious; public AP
 Modern development increasingly pairs humans with agents. LLLang treats that as a first-class requirement:
 
 - **`.mll` files** pack module summaries, public API surfaces, and constraints in **TOON** (Token-Oriented Object Notation) for compact, parse-friendly context.
-- **`Std.Llm`** (planned runtime) exposes structured tools, schema-bound decoding, and agent workflows aligned with the type system.
+- **`Std.Llm`** exposes structured tools, schema-bound decoding, and agent workflows (mock providers today; real providers Later).
 - Documentation and specs are **English**, stable, and cross-linked so agents can anchor on `grammar.ebnf` and ADRs instead of guessing runtime behavior.
 
 ### Predictability over magic

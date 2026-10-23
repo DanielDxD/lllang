@@ -1,0 +1,10 @@
+<idea-plugin>
+  <id>lang.lllang</id>
+  <name>LLLang</name>
+  <version>0.2.0</version>
+  <vendor>LLLang Contributors</vendor>
+  <description>LLLang syntax highlighting (TextMate) — Phase 1.6a skeleton.</description>
+  <depends>com.intellij.modules.platform</depends>
+  <extensions defaultExtensionNs="com.intellij">
+  </extensions>
+</idea-plugin>

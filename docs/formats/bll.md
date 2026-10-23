@@ -1,29 +1,31 @@
 # `.bll` binary library format
 
-A **`.bll` (binary LLLang library)** file is a self-contained, target-specific native artifact produced when a library package is built for publishing or local consumption. Consumers **link** `.bll` files; they **never recompile** dependency source to use a published library.
+A **`.bll` (binary LLLang library)** is a **portable** prebuilt artifact produced by `lang pack`. Consumers **finalize** it for a chosen `--target` at link time; they **never recompile** dependency `.ll` source.
+
+See [ADR 010](../design/adr/010-portable-bll-multitarget.md).
 
 ## Design principles
 
-1. **One `.bll` per target triple** — e.g. `aarch64-apple-darwin.bll`, `x86_64-unknown-linux-gnu.bll`. Cross-compilation produces one file per requested target.
-2. **Immutable at rest** — content-addressed in `~/.lang/store`; registries store blobs by hash.
-3. **Paired with `.sbl`** — types and `@abi` contracts live in `.sbl`; native code and symbols live in `.bll`. A cryptographic hash ties the pair together.
-4. **No consumer codegen for deps** — generic instantiation inside a dependency is resolved when the **library** was built; remaining generic/inline material is embedded as LLVM bitcode sections (see below).
+1. **One `.bll` per package version** — not one file per OS. The published blob is target-independent LLVM bitcode.
+2. **Immutable at rest** — content-addressed in `~/.lang/store`; registries store one blob by hash.
+3. **Paired with `.sbl`** — types and `@abi` contracts live in `.sbl`; code lives in `.bll`. A hash ties the pair together.
+4. **Finalize, don’t recompile source** — the consumer toolchain lowers bitcode → native object for the build triple (with optimization), then links. Dependency `.ll` is not in the graph.
 
-## On-disk layout
+## On-disk layout (BLL v2)
 
-A `.bll` file is a length-prefixed binary container (little-endian). Sections appear **in order**:
+A `.bll` file is a little-endian length-prefixed container:
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ HEADER                                                      │
+│ HEADER (magic BLL\x02, version, ABI epoch, PORTABLE flag)   │
 ├─────────────────────────────────────────────────────────────┤
-│ NATIVE OBJECTS (platform object files / merged .o blobs)    │
+│ PACKAGE ID (name + semver)                                  │
 ├─────────────────────────────────────────────────────────────┤
-│ LLVM BITCODE (generics / forced inline templates)           │
+│ LLVM BITCODE (primary payload)                              │
 ├─────────────────────────────────────────────────────────────┤
-│ ABI SYMBOL TABLE                                            │
+│ ABI SYMBOL TABLE (optional)                                 │
 ├─────────────────────────────────────────────────────────────┤
-│ RESOURCES (embedded assets, strings, reflection tables)     │
+│ RESOURCES (optional)                                        │
 ├─────────────────────────────────────────────────────────────┤
 │ HASH (integrity + .sbl binding)                             │
 └─────────────────────────────────────────────────────────────┘
@@ -33,115 +35,80 @@ A `.bll` file is a length-prefixed binary container (little-endian). Sections ap
 
 | Field | Description |
 |-------|-------------|
-| Magic | `BLL\x01` |
-| Version | Container format version (u16) |
-| ABI version | Language ABI epoch (u16); must match consumer compiler |
-| Target triple | NUL-terminated string (`aarch64-apple-darwin`, …) |
+| Magic | `BLL\x02` |
+| Version | Container format version (`2`) |
+| ABI version | Language ABI epoch; must match consumer compiler |
+| Flags | `PORTABLE_BITCODE` required |
 | Package id | Name + semver of producing package |
-| Section count | Usually 5 payload sections + hash |
-| Flags | e.g. `PIC`, `LTO`, `UNWIND_TABLES` |
 
-The header allows tools to reject wrong-target or wrong-ABI artifacts before parsing bodies.
+Native target triple is **not** stored in the published header. Materialized objects for a triple live only under the consumer’s `.lang/cache/`.
 
-### Native objects
+### LLVM bitcode
 
-Contains one or more **native object files** (ELF `.o`, Mach-O `.o`, COFF `.obj`) or a single merged object blob per platform convention. This is what the linker consumes for:
+Primary payload: LLVM bitcode for the library’s compiled MIR (monomorphized public API). The publisher does **not** ship host `.o` / `.obj`.
 
-- Non-generic functions and methods
-- Statically monomorphized instantiations performed at library build time
-- Runtime support objects (ARC helpers, protocol witnesses emitted as concrete)
+On `lang build --target=T`, the toolchain:
 
-Objects are stored with alignment suitable for mmap; optional compression (zstd) is indicated in header flags.
+1. Parses the bitcode section
+2. Sets module triple/data layout for `T`
+3. Emits a native object for `T`
+4. Links with `$LANG_HOME/toolchain/lib/<T>/liblllang_rt.a` (or Windows equivalent)
 
-### LLVM bitcode (generics / inline)
+### Migration from v1
 
-When the library exposes **generic** APIs or symbols marked for cross-crate inlining, the producer may embed **LLVM bitcode** modules for:
-
-- Templates not monomorphized at library build time (consumer monomorphization is **forbidden** for published libs — the library builder must emit all supported specializations or provide bitcode only for whitelisted `@InlineGeneric` APIs)
-- `@ForceInline` bodies referenced across package boundaries
-
-The consumer linker uses this section only through the **toolchain's blessed LTO path** when building an executable that links the `.bll`; consumers do not run `llc` on dependency `.ll` source.
-
-Phase 2 policy: default publish mode **monomorphizes all public generics** into native objects; bitcode section is optional and feature-gated for advanced interop.
-
-### ABI symbol table
-
-Maps stable **ABI names** (see `@abi` in `.sbl`) to:
-
-- Symbol name in native objects
-- Signature encoding (calling convention, struct return, sret)
-- Generic instantiation key (if applicable)
-- Weak / optional linkage flags
-
-The loader verifies that every `@abi` entry in the paired `.sbl` resolves to a symbol row. Missing symbols fail at link time with a diagnostic referencing package version and hash.
-
-### Resources
-
-Optional embedded data:
-
-- String pools for reflection / errors
-- Codable schema tables
-- Static assets declared in `Package.ll` target `resources:` entries
-- Debug info bundles (split DWARF may live beside `.bll` in debug builds)
-
-Resources are read-only at runtime; mutable state stays in normal `.ll` static initialization linked from native objects.
-
-### Hash
-
-Final section (also duplicated as footer checksum):
-
-- **BLAKE3** digest over all preceding sections
-- **SBL binding hash** — digest of the canonical `.sbl` ABI text
-- **Source revision** — optional git commit or `lang pack` build id
-
-`lang restore` and the linker compare `.sbl` on disk with the hash embedded in `.bll`. Mismatch is a hard error — never silently relink.
+Artifacts that are raw native objects or magic `BLL\x01` are **rejected** with a diagnostic to republish via `lang pack` (BLL v2). There is no automatic conversion.
 
 ## Producer workflow
 
 ```bash
 cd my-lib
-lang build --release --target aarch64-apple-darwin
-lang pack --target aarch64-apple-darwin
-# → produces package.sbl + targets/aarch64-apple-darwin.bll
+lang pack
+# → .lang/dist/package.sbl + package.bll (portable bitcode)
 ```
 
-`lang pack` validates:
-
-- Public API ⊆ compiled symbols
-- ABI table complete
-- Hash written and self-consistent
+`lang pack` is independent of the host OS for the published blob shape.
 
 ## Consumer workflow
 
-When app `App` depends on `acme.widgets@1.2.3`:
-
-1. Resolver fetches `.sbl` + `.bll` for active target into the store.
-2. Compiler loads types from `.sbl` only.
-3. Linker loads native objects + symbol table from `.bll`.
-4. No `.ll` from `acme.widgets` is required or allowed in the consumer graph.
-
 ```bash
-lang build   # selects .bll matching host or --target
+lang build --target linux/amd64
+# or: LANG_OS=linux LANG_ARCH=amd64 lang build
 ```
+
+1. Resolver loads `.sbl` + portable `.bll` from the store.
+2. Compiler typechecks against `.sbl` only.
+3. Linker materializes `.bll` → object for the active triple (cached), then links.
+
+## Official targets (MVP)
+
+| Alias | Triple |
+|-------|--------|
+| `darwin/arm64`, `macos/arm64` | `aarch64-apple-darwin` |
+| `linux/amd64` | `x86_64-unknown-linux-gnu` |
+| `linux/arm64` | `aarch64-unknown-linux-gnu` |
+| `windows/amd64` | `x86_64-pc-windows-msvc` |
+| `windows/arm64` | `aarch64-pc-windows-msvc` |
+
+macOS x86_64 is **not** an official target.
 
 ## What `.bll` is not
 
-- Not a fat archive of source files
-- Not a JVM JAR or .NET assembly (though conceptually similar to a native `.lib` / `.a` with metadata)
-- Not recompilable by end users — fork the library and publish a new package if you need different optimizations
+- Not a fat multi-slice native archive
+- Not a tree of dependency source
+- Not recompilable from `.ll` by end users — fork and republish if you need different public API codegen
 
 ## Tooling
 
 | Command | Interaction |
 |---------|-------------|
-| `lang pack` | Create `.bll` + update hashes |
-| `lang publish` | Upload blob to registry |
-| `lang restore` | Verify hashes after download |
-| `lang --info` | List supported BLL container version |
+| `lang pack` | Emit portable `.bll` + `.sbl` |
+| `lang publish` | Upload one `.bll` blob |
+| `lang restore` | Verify single `bll` hash |
+| `lang build --target …` | Finalize bitcode for triple |
+| `lang --info` | List supported BLL version + official triples |
 
 ## See also
 
 - [`.sbl` type declarations](sbl.md)
 - [Versioning & ABI](../packages/versioning-and-abi.md)
 - [Package manager](../packages/package-manager.md)
-- [Build pipeline](../toolchain/build-pipeline.md)

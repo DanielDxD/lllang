@@ -35,6 +35,8 @@ pub enum TokenKind {
     Import,
     Struct,
     Class,
+    /// Phase 10: serial-mailbox reference type (parsed like `class`).
+    Actor,
     Enum,
     Protocol,
     Extension,
@@ -52,6 +54,7 @@ pub enum TokenKind {
     Unsafe,
 
     // Access
+    Open,
     Public,
     Internal,
     Private,
@@ -111,6 +114,10 @@ pub enum TokenKind {
 
     // Punctuation
     At,
+    /// `#` start of a compile-time / scope directive (`#defer`, `#die`, …).
+    Hash,
+    /// `$IDENT` compile-time constant (`$OS`, `$DEBUG`, …).
+    DollarIdent(String),
     Dot,
     Comma,
     Colon,
@@ -177,6 +184,7 @@ impl TokenKind {
                 | TokenKind::Var
                 | TokenKind::Const
                 | TokenKind::At
+                | TokenKind::Open
                 | TokenKind::Public
                 | TokenKind::Internal
                 | TokenKind::Private

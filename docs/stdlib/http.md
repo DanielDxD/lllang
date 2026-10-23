@@ -1,81 +1,47 @@
 # Std.Http
 
-**Std.Http** provides an async HTTP client, a lightweight server, and composable middleware.
+**Std.Http** HTTP client helpers and a durable path-routed server (v0.2).
 
 ```ll
 import Std.Http
 ```
 
-## Client
+## Shipped MVP — client
 
 ```ll
-public struct HttpClient {
-    public init(base: URL? = nil, timeout: Duration = .seconds(30))
-    public func get(_ path: String, headers: [String: String] = [:]) async throws(HttpError) -> Response
-    public func post(_ path: String, body: Data, contentType: String = "application/octet-stream") async throws(HttpError) -> Response
-    public func send(_ request: Request) async throws(HttpError) -> Response
+Http.get(url: String) -> String
+Http.post(url: String, body: String) -> String
+```
+
+## Shipped MVP — server
+
+Persistent accept loop. Handler receives the request path and returns the response body:
+
+```ll
+public func handle(path: String) -> String {
+    if path == "/health" {
+        return "ok"
+    }
+    "404 Not Found"   // status becomes 404
 }
 
-public struct Request {
-    public var method: Method
-    public var url: URL
-    public var headers: [String: String]
-    public var body: Data
-}
-
-public struct Response {
-    public var status: Int
-    public var headers: [String: String]
-    public var body: Data
-    public func json<T: Decodable>(_ type: T.Type) throws(HttpError) -> T
+public func main() {
+    HttpServer.serve(8080, handle)
 }
 ```
 
-## URL
+- Listens on `0.0.0.0:port`, parses `METHOD path HTTP/1.x`, calls `handle(path)`.
+- Response: `text/plain`, `Connection: close`. Body exactly `404 Not Found` → HTTP 404.
+- **TLS:** not built-in for v0.2 — put Caddy/nginx (or similar) in front. Native TLS remains ROADMAP open.
+
+One-shot smoke helper (single request then exit):
 
 ```ll
-public struct URL: Equatable, Hashable, Codable {
-    public init(_ string: String) throws(UrlError)
-    public var scheme: String { get }
-    public var host: String { get }
-    public var path: String { get }
-}
+HttpServer.listen(port: Int, body: String)
 ```
 
-## Server
+Prefer `serve` for real services. See `examples/http-server` and the `web` template.
 
-```ll
-public typealias HttpHandler = (Request) async throws(HttpError) -> Response
+## Not shipped
 
-public struct HttpServer {
-    public init(bind: SocketAddress)
-    public func route(_ method: Method, _ pattern: String, handler: @escaping HttpHandler)
-    public func use(_ middleware: Middleware)
-    public func run() async throws(HttpError)
-}
-```
-
-## Middleware
-
-```ll
-public struct Middleware {
-    public static func logging() -> Middleware
-    public static func gzip() -> Middleware
-    public static func cors(origins: [String]) -> Middleware
-}
-```
-
-## Streaming bodies
-
-Large uploads/downloads use stream types instead of materializing `Data`:
-
-```ll
-public protocol HttpBody {
-    func write(to writer: Writer) async throws(HttpError)
-}
-```
-
-## See also
-
-- [Net](net.md) — transport layer
-- [Json](json.md) — response decoding
+Full `HttpClient` / middleware / `HttpServer.route` DSL / TLS upgrades — design sketches only.

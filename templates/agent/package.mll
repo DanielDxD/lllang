@@ -1,4 +1,3 @@
-package: {{name}}
-summary: Agent scaffold from lang new agent
-api: []
-pitfalls: []
+name: {{name}}
+version: 0.1.0
+summary: Agent scaffold for {{Name}}

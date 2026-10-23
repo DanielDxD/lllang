@@ -11,9 +11,9 @@ description: LLLang editor support — LSP, formatting, TextMate grammar, and VS
 lang lsp    # stdio; point editors at the lang binary
 ```
 
-Capabilities: parse + sema diagnostics, document symbols, folding, go-to-definition, references, rename, inlay hints, typed hover, document formatting, type-aware completion (members after `.`), code action for missing `try` (LL2005). See [docs/toolchain/lsp.md](../../docs/toolchain/lsp.md).
+Capabilities: parse + sema diagnostics, document symbols, folding, go-to-definition, references, rename, inlay hints, typed hover (incl. `throws` / `#deprecated`), document formatting, type-aware completion (members after `.`, including extensions), code actions for missing `try` (LL2005), `override` (LL2000), cast kind (LL2002), empty-array annotation (LL3001). See [docs/toolchain/lsp.md](../../docs/toolchain/lsp.md).
 
-Tree-sitter stub: [`editors/tree-sitter-lllang`](../../editors/tree-sitter-lllang) (experimental; TextMate remains primary).
+Tree-sitter stub: [`editors/tree-sitter-lllang`](../../editors/tree-sitter-lllang) (experimental; covers extensions / `#defer` / actors lightly; TextMate remains primary).
 
 ## Formatter
 

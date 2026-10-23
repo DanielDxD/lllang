@@ -60,7 +60,7 @@ Link failures cite package, version, and symbol.
 Each publish produces paired digests:
 
 - **SBL hash** — canonical declaration text
-- **BLL hash** — entire binary per target
+- **BLL hash** — entire portable `.bll` blob (one per package version)
 
 Cross-embedded hashes ensure:
 

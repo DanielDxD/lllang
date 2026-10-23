@@ -2,9 +2,10 @@
 import Std.SolutionDescription
 
 let solution = Solution(
-    name: "{{name}}",
+    name: "{{Name}}",
     projects: [
         .package(path: "packages/Core"),
         .package(path: "apps/Cli"),
     ],
+    defaultProjects: ["Cli"],
 )

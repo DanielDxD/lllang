@@ -8,7 +8,23 @@
 - **LLM-native** — `.mll` metadata, `Std.Llm`, TOON/JSON first-class
 - **Consistent toolkit** — `lang` CLI with .NET-style scaffolds
 
-> **Status:** Phase 1 — language specification, documentation, syntax frontend, minimal LSP, and editor highlighting. Full LLVM codegen and stdlib runtime land in later phases. See [ROADMAP.md](ROADMAP.md).
+> **Status (v0.2 usable slice):** Phases 1–10 + 1.1–1.6 MVP — compile/run with LLVM, ARC, packages, templates, concurrency, sqlite, `HttpServer.serve`, installers. Freeze contract: [docs/stdlib/SHIPPED.md](docs/stdlib/SHIPPED.md). Still open: native TLS, Phase 1.7 (`tmp/1.2`). See [ROADMAP.md](ROADMAP.md).
+
+## Install
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lllang-lang/llang/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/lllang-lang/llang/main/scripts/install.ps1 | iex
+```
+
+Prebuilt binaries cover macOS (arm64/x64), Linux (x64/arm64), and Windows x64. End users need a host linker (`clang` / Xcode CLT) and sqlite — **not** LLVM 22. Full matrix and contributor build steps: [Installation](docs/getting-started/installation.md).
 
 ## Quick taste
 
@@ -100,15 +116,16 @@ Templates: `console`, `lib`, `cli`, `web`, `test`, `agent`, `mcp`, `bench`, `sol
 - [Standard library](docs/stdlib/overview.md)
 - [LLM integration](docs/llm/overview.md)
 
-## Building the toolchain (phase 1)
+## Building the toolchain (contributors)
 
-Requires [Rust](https://rustup.rs/) 1.85+.
+Requires [Rust](https://rustup.rs/) 1.85+ and **LLVM 22** (`LLVM_SYS_221_PREFIX`). See [Installation](docs/getting-started/installation.md).
 
 ```bash
-cargo build -p lang
+cargo build -p lang --release
 cargo test
-./target/debug/lang --version
-./target/debug/lang check examples/hello
+./target/release/lang --version
+./target/release/lang check examples/hello
+./scripts/pack-release.sh   # → dist/lang-<ver>-<triple>.tar.gz
 ```
 
 VS Code / Cursor extension: see [editors/vscode](editors/vscode).  

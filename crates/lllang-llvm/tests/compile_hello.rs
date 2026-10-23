@@ -40,13 +40,25 @@ fn compile_and_run_hello() {
     let _ = std::fs::remove_dir_all(&out_dir);
     std::fs::create_dir_all(&out_dir).unwrap();
 
+    let triple = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "aarch64-apple-darwin"
+    };
     let opts = CodegenOptions {
         optimize: false,
         emit_llvm_ir: false,
+        target_triple: triple.into(),
     };
     let gen = codegen(&mir, &out_dir, &opts).expect("codegen");
     let bin = out_dir.join("hello");
-    link_executable(&[gen.object_path], &bin, false).expect("link");
+    link_executable(&[gen.object_path], &bin, false, triple).expect("link");
 
     let output = Command::new(&bin).output().expect("run");
     let stdout = String::from_utf8_lossy(&output.stdout);

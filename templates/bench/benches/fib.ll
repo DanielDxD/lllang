@@ -1,10 +1,13 @@
 namespace {{Name}}Bench
 
-func twice(n: Int) -> Int {
-    n + n
+import {{Name}}
+
+@Bench
+public func benchTwice() {
+    let _x = twice(10)
 }
 
 @Bench
-func twice10() {
-    let _x = twice(10)
+public func benchFib() {
+    let _x = fib(15)
 }

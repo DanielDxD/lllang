@@ -15,33 +15,35 @@ The **`lang`** binary is the unified entry point for project scaffolding, builds
 | `--solution PATH` | Use `Solution.ll` for monorepo commands |
 | `--offline` | Refuse network for package commands |
 
-**Phase 2 implemented:** `--version`, `--info`, `check` (sema), `build`, `run`, `lsp` (syntax + sema diagnostics).
+Global flags and core compile path ship today. Status below reflects the `lang` binary (Phases 2–1.1); stubs print a short “not yet” message.
 
 ## Command overview
 
 | Command | Status | Summary |
 |---------|--------|---------|
-| `new` | Planned | Scaffold from template (including `solution`) |
-| `build` | **Phase 2** | Compile package or solution members |
-| `solution` | Planned | Add/list/remove solution members |
-| `run` | **Phase 2** | Build (if needed) and run executable |
-| `watch` | Planned | Rebuild/rerun on file changes |
-| `test` | Planned | Run unit/integration tests |
-| `bench` | Planned | Run benchmarks |
-| `check` | **Phase 2** | Parse + sema diagnostics (LL1xxx / LL2xxx) |
-| `fmt` | Planned | Format source |
-| `doc` | Planned | Generate documentation |
-| `clean` | Planned | Remove `.lang/` artifacts |
-| `add` | Planned | Add dependency |
-| `remove` | Planned | Remove dependency |
-| `restore` | Planned | Install from lockfile |
-| `update` | Planned | Bump dependencies within constraints |
-| `pack` | Planned | Produce `.sbl` + `.bll` archive |
-| `publish` | Planned | Upload to registry |
-| `search` | Planned | Search registry index |
-| `llm` | Planned | LLM subcommands |
-| `sdk` | Planned | Manage cross-compilation SDKs |
-| `lsp` | **Phase 1** | Language Server (stdio) |
+| `new` | **Shipped** | Scaffold from template (including `solution`) |
+| `build` | **Shipped** | Compile package or solution members |
+| `solution` | **Shipped** | Add/list/remove solution members |
+| `run` | **Shipped** | Build (if needed) and run executable |
+| `watch` | **Shipped** | Rebuild/rerun on file changes (MVP) |
+| `test` | **Shipped** | Run `@Test` / suite harness |
+| `bench` | **Shipped** | Run `@Bench` functions |
+| `check` | **Shipped** | Parse + sema diagnostics (LL1xxx / LL2xxx) |
+| `fmt` | **Shipped** | Format source |
+| `doc` | **Shipped** | Write MVP HTML stub under `.lang/doc/` |
+| `clean` | **Shipped** | Remove `.lang/` artifacts |
+| `add` | **Shipped** | Add dependency to `Package.ll` + fetch |
+| `remove` | **Shipped** | Remove dependency |
+| `restore` | **Shipped** | Install from lockfile / store |
+| `update` | **Shipped** | Refresh from lock (`restore` MVP) |
+| `pack` | **Shipped** | Produce `.sbl` + `.bll` archive |
+| `publish` | **Shipped** | Upload to registry (local/file mock) |
+| `search` | **Shipped** | Search registry index |
+| `llm` | **Shipped** | `gen` / `context` / `explain` MVPs |
+| `repl` | **Shipped** | Interactive REPL MVP |
+| `debug` | **Shipped** | DAP probe shell |
+| `sdk` | **Shipped** | Manage cross-compilation SDKs (MVP) |
+| `lsp` | **Shipped** | Language Server (stdio) |
 
 ---
 
@@ -84,13 +86,14 @@ See [Solutions](solutions.md) and the `solution` template in [Templates](templat
 ## `lang build`
 
 ```bash
-lang build [--release] [--target TRIPLE] [--product NAME] [--project NAME] [--all] [-w]
+lang build [--release] [--target ALIAS|TRIPLE] [--product NAME] [--project NAME] [--all] [-w]
 ```
 
 - Compiles the current package, or solution `defaultProjects` when `Solution.ll` is present
 - `--project NAME` builds one member (and its path dependencies)
 - `--all` builds every project listed in `Solution.ll`
-- Libraries emit `.bll` under `targets/` when `--pack` is combined (see `pack`)
+- `--target` accepts Go-like aliases (`linux/amd64`, `windows/arm64`, `darwin/arm64`, …) or full LLVM triples; default is host when official, else `LANG_OS`/`LANG_ARCH`, else error
+- Dependencies’ portable `.bll` are finalized for the active target at link (see `pack`)
 - `-w` treats warnings as errors
 
 ---
@@ -218,10 +221,10 @@ Resolves newest versions allowed by semver ranges.
 ### `lang pack`
 
 ```bash
-lang pack [--target TRIPLE] [--output FILE]
+lang pack
 ```
 
-Builds release artifacts and writes registry tarball (`.sbl` + per-target `.bll` + manifest).
+Builds release artifacts and writes `.lang/dist/package.sbl` + portable `package.bll` (BLL v2 bitcode).
 
 ### `lang publish`
 

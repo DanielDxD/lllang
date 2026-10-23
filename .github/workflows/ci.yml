@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install LLVM 22
+        run: |
+          brew install llvm@22
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm@22)/bin" >> "$GITHUB_PATH"
+
+      - name: cargo test
+        run: cargo test --workspace --exclude lllang-llvm || cargo test -p lllang-syntax -p lllang-sema -p lllang-manifest -p lllang-pack -p lllang-mir
+
+      - name: Build lang
+        run: cargo build -p lang
+
+      - name: lang fmt --check (samples)
+        run: |
+          ./target/debug/lang fmt --check examples/hello examples/unit-tests examples/compile-constants 2>/dev/null \
+            || ./target/debug/lang fmt --check examples/unit-tests examples/compile-constants
+
+      - name: lang test (unit-tests example)
+        run: |
+          cd examples/unit-tests
+          ../../target/debug/lang test
+
+      - name: v0.2 freeze examples (check/run)
+        run: |
+          set -e
+          for ex in extensions env-typed identity stdlib-surface actors-cancel cancellation prebuilt-consumer hofs task-group regex-smoke interop-c hmac-smoke; do
+            echo "::group::$ex"
+            (cd "examples/$ex" && ../../target/debug/lang check && ../../target/debug/lang run)
+            echo "::endgroup::"
+          done
+
+      - name: HttpServer.serve curl smoke
+        run: |
+          set -e
+          cd examples/http-server
+          ../../target/debug/lang build
+          .lang/build/debug/http-server &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -sf -m 1 http://127.0.0.1:18080/health | grep -q ok; then
+              curl -sf -m 1 http://127.0.0.1:18080/ | grep -q hello
+              code=$(curl -s -m 1 -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/missing)
+              test "$code" = "404"
+              echo "http-server smoke ok"
+              exit 0
+            fi
+            sleep 0.2
+          done
+          echo "http-server failed to become ready" >&2
+          exit 1
+
+      - name: Prebuilt greet pack + check
+        run: |
+          set -e
+          (cd examples/prebuilt-greet && ../../target/debug/lang check && ../../target/debug/lang pack)
+
+  tarball:
+    runs-on: macos-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install LLVM 22
+        run: |
+          brew install llvm@22
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+      - name: Build release + pack tarball
+        run: |
+          cargo build -p lang --release
+          ./scripts/pack-release.sh
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: lang-release
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/SHA256SUMS

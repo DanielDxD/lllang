@@ -2,7 +2,7 @@
 import Std.PackageDescription
 
 let package = Package(
-    name: "{{name}}",
+    name: "{{package}}",
     products: [
         .executable(name: "{{name}}", targets: ["{{Name}}"]),
     ],

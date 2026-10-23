@@ -1,5 +1,6 @@
 # Build
 /target/
+/dist/
 **/*.rs.bk
 *.bll
 !examples/**/*.bll
@@ -27,3 +28,8 @@ editors/vscode/*.vsix
 *.log
 .env
 .direnv/
+
+# Windows SQLite prebuilts (populated by scripts/fetch-sqlite-windows.ps1)
+/runtime/windows/bin/
+/runtime/windows/lib/
+/runtime/windows/include/

@@ -8,3 +8,5 @@
 | [004](004-toon-for-mll.md) | TOON for `.mll` metadata |
 | [005](005-typed-errors.md) | Typed `throws(E)` errors |
 | [006](006-tower-lsp.md) | tower-lsp for the language server |
+| [009](009-access-control.md) | Access control (Swift-like; no `protected`) |
+| [010](010-portable-bll-multitarget.md) | Portable bitcode `.bll` + Go-style multi-target |

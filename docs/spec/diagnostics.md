@@ -8,13 +8,13 @@ LL<Sphase><nnnn>: <message>
 
 | Phase digit | Range | Subsystem |
 |-------------|-------|-----------|
-| `0` | `LL0001`–`LL0999` | Lexer and parser (Phase 1) |
-| `1` | `LL1000`–`LL1999` | Name resolution (planned) |
-| `2` | `LL2000`–`LL2999` | Type checking (planned) |
-| `3` | `LL3000`–`LL3999` | Memory / ARC / exclusivity (planned) |
-| `4` | `LL4000`–`LL4999` | Codegen and linker (planned) |
-| `5` | `LL5000`– `LL5999` | Packages and manifests (planned) |
-| `6` | `LL6000`–`LL6999` | LSP and editor adapters (planned) |
+| `0` | `LL0001`–`LL0999` | Lexer and parser |
+| `1` | `LL1000`–`LL1999` | Name resolution (`lllang-sema`) |
+| `2` | `LL2000`–`LL2999` | Type checking (`lllang-sema`) |
+| `3` | `LL3000`–`LL3999` | Lowering / not-yet-implemented constructs (`LL3001`), memory notes |
+| `4` | `LL4000`–`LL4999` | Codegen and linker (reserved; traps use runtime messages today) |
+| `5` | `LL5000`–`LL5999` | Packages and manifests (reserved / emerging) |
+| `6` | `LL6000`–`LL6999` | LSP and editor adapters (reserved / emerging) |
 
 Severity: **Error** stops compilation; **Warning** allows continue; **Note** is informational.
 

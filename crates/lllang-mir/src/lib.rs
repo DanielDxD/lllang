@@ -79,10 +79,12 @@ impl MirTy {
             Ty::Tuple(elems) => MirTy::Tuple(elems.iter().map(MirTy::from_hir).collect()),
             Ty::Named(n) => MirTy::Named(n.clone()),
             Ty::Func { .. } => MirTy::Named("<func>".into()),
-            Ty::Protocol(n) => MirTy::Class(n.clone()),
+            // Existential: erased to a class/object pointer (witness via vtable when virtual).
+            Ty::Protocol(n) => MirTy::Named(format!("existential:{n}")),
             Ty::Class(n) => MirTy::Class(n.clone()),
             Ty::Struct(n) => MirTy::Struct(n.clone()),
             Ty::Enum(n) => MirTy::Enum(n.clone()),
+            Ty::Result { .. } => MirTy::Enum("Result".into()),
             Ty::Error => MirTy::Error,
         }
     }
@@ -91,7 +93,8 @@ impl MirTy {
         matches!(
             self,
             MirTy::String | MirTy::Array(_) | MirTy::Class(_)
-        ) || matches!(self, MirTy::Optional(inner) if inner.is_refcounted())
+        ) || matches!(self, MirTy::Named(n) if n.starts_with("existential:"))
+            || matches!(self, MirTy::Optional(inner) if inner.is_refcounted())
     }
 }
 
@@ -114,6 +117,20 @@ pub enum Callee {
         class: String,
         method: String,
         slot: u32,
+    },
+    /// Spawn zero-arg function `name` on the thread pool.
+    TaskSpawn {
+        name: String,
+        /// Use `ll_task_spawn_ret` when the worker returns a pointer result.
+        returns_value: bool,
+    },
+    /// `TaskGroup.add` — spawn zero-arg void `name` into group (args[0] = group handle).
+    TaskGroupAdd {
+        name: String,
+    },
+    /// `HttpServer.serve` — args[0] = port; handler is `(String) -> String`.
+    HttpServe {
+        handler: String,
     },
 }
 
@@ -256,6 +273,9 @@ pub enum TypeDef {
         fields: Vec<(String, MirTy)>,
         parent: Option<String>,
         virtual_methods: Vec<String>,
+        /// Indices into `fields` that are weak references.
+        weak_fields: Vec<usize>,
+        unowned_fields: Vec<usize>,
     },
     Enum {
         name: String,

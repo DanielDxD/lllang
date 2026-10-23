@@ -24,6 +24,10 @@ pub enum TypeDef {
         parent: Option<String>,
         conforms: Vec<String>,
         virtual_methods: Vec<String>,
+        /// Field names held weakly (no strong retain; cleared on deinit).
+        weak_fields: Vec<String>,
+        unowned_fields: Vec<String>,
+        is_actor: bool,
     },
     Enum {
         name: String,
@@ -60,6 +64,8 @@ pub struct Function {
     pub self_ty: Option<Ty>,
     pub is_virtual: bool,
     pub is_override: bool,
+    /// Phase 10: async function (await allowed; body still sync-shaped ABI).
+    pub is_async: bool,
     pub body: Option<Body>,
 }
 
@@ -74,6 +80,8 @@ pub enum Stmt {
         name: String,
         ty: Ty,
         init: Expr,
+        /// When set, `name` holds a Task handle; `await name` yields this result type.
+        async_let_result: Option<Ty>,
     },
     Var {
         name: String,
@@ -100,6 +108,39 @@ pub enum Stmt {
         cond: Expr,
         body: Body,
     },
+    For {
+        /// Loop variable name.
+        name: String,
+        /// Start bound.
+        start: Expr,
+        /// End bound (`..<` exclusive, `...` inclusive).
+        end: Expr,
+        /// When true, iterate `start...end` (inclusive).
+        inclusive: bool,
+        body: Body,
+    },
+    /// `for x in arr` — iterate Int array elements.
+    ForEach {
+        name: String,
+        array: Expr,
+        body: Body,
+    },
+    Break,
+    Continue,
+    Defer {
+        body: Body,
+    },
+    Die {
+        message: String,
+    },
+    /// Explicit `{ ... }` block — scopes `#defer` to the block (Phase 1.1).
+    Scope {
+        body: Body,
+    },
+    /// `@run func()` — spawn zero-arg void function on the executor.
+    Run {
+        func: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -114,6 +155,8 @@ pub enum Expr {
     Local(String),
     Param(String),
     Self_,
+    /// Reference to superclass for static dispatch (`super.method`).
+    Super,
     Call {
         callee: Callee,
         args: Vec<Expr>,
@@ -171,6 +214,26 @@ pub enum Expr {
         expr: Box<Expr>,
         to: Ty,
     },
+    ArrayLit {
+        elems: Vec<Expr>,
+        elem_ty: Ty,
+    },
+    DictLit {
+        entries: Vec<(Expr, Expr)>,
+    },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        ty: Ty,
+    },
+    /// Reference to a top-level / synthetic function (closures, method refs).
+    /// `captures` are prepended as leading arguments when the function is called
+    /// (Phase 1.2 closure env — values retained/copied at the creation site).
+    FuncRef {
+        name: String,
+        ty: Ty,
+        captures: Vec<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,7 +253,26 @@ pub enum Callee {
         receiver: Box<Expr>,
         name: String,
     },
+    /// Static call to parent class method (`super.foo`).
+    SuperMethod {
+        parent: String,
+        name: String,
+    },
     Builtin(String),
+    /// Spawn zero-arg function `name` on the executor (`ll_task_spawn` / `_ret`).
+    TaskSpawn {
+        name: String,
+        /// When true, use `ll_task_spawn_ret` (pointer-returning worker).
+        returns_value: bool,
+    },
+    /// `TaskGroup.add(fn)` — spawn zero-arg void `name` into the group (arg[0] = group).
+    TaskGroupAdd {
+        name: String,
+    },
+    /// `HttpServer.serve(port, handler)` — handler is `(String) -> String` mangled name.
+    HttpServe {
+        handler: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

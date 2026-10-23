@@ -11,7 +11,7 @@ This table summarizes intentional similarities and differences. LLLang is **not*
 | Enum cases | `case name` | `Name = 0,` | `name, payload(...)` — no `case` | Less keyword clutter; uniform with tuples |
 | Primary constructors | Limited (memberwise / explicit init) | Primary ctor (C# 12+) | Struct/class `(params)` in header | Fields and invariants visible at declaration |
 | Protocols / interfaces | `protocol` + associated types | `interface` | `protocol P<T>` with angle generics | Explicit generic params instead of associated types |
-| Existentials | `any P` / `some P` | Interfaces + variance | Concrete generics + planned witness model | Smaller type system surface in v1 |
+| Existentials | `any P` / `some P` | Interfaces + variance | Protocol existentials as values + witness MVP | Smaller type system surface than Swift `any`/`some` sugar |
 | Error handling | `throws` + untyped `Error` | Exceptions | `throws(ErrorType)` typed + `Result`-like flows | Errors are part of the API contract |
 | Expression switch | Limited; often statement | `switch` expression (recent) | `switch e { pat => expr }` | Expression-oriented control flow by default |
 | Pattern matching | `case let` / `where` | `switch` patterns (growing) | `=>` arms, `where`, no enum `case` | Aligns with expression switch syntax |
@@ -24,7 +24,7 @@ This table summarizes intentional similarities and differences. LLLang is **not*
 | Package manager | SPM (source) | NuGet | `lang` + `.bll`/`.sbl` prebuilt | Faster CI, no `node_modules`-scale trees |
 | LLM metadata | None standard | None standard | `.mll` + TOON | Compact machine context for agents |
 | String indexing | `String.Index` | `ReadOnlySpan<char>` | Unicode views (`chars`, `graphemes`) | Avoid index invalidation footguns |
-| Concurrency | `async/await`, actors | `async/await`, tasks | `async`/`await`; actors planned | Align with industry without shipping runtime in Phase 1 |
+| Concurrency | `async/await`, actors | `async/await`, tasks | `async`/`await`, `actor`, `@run`, cancellation | Native executor MVP; polish in Phase 1.1 |
 | Conditional compilation | `#if` | `#if` | `#if` / `#elseif` / `#endif` | Cross-platform builds with explicit branches |
 | Default dispatch | Witness + class vtable mix | Virtual by default on interfaces | Static default; dynamic when marked | Performance-first ABI story |
 | Deinitializer | `deinit` | Finalizers (non-deterministic) | `deinit` on classes | Deterministic resource release |

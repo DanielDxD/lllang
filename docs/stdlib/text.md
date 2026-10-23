@@ -6,28 +6,27 @@
 import Std.Text
 ```
 
+**MVP (Phase 1.1c):** `uppercased` / `lowercased` / `replacing` / `contains` / `starts(with:)` / `split` and array `joined`. Grapheme / Unicode scalar views, full `Regex`, and `some Sequence` join APIs are **Later**.
+
 ## Views and iteration
+
+UTF-8 / grapheme views (`bytes` / `chars` / `graphemes`) are **Later**. Indexing today uses integer offsets on the UTF-8 storage.
 
 ```ll
 public extension String {
-    public var bytes: UTF8Bytes { get }
-    public var chars: UnicodeScalars { get }
-    public var graphemes: GraphemeClusters { get }
-    public func substring(_ range: Range<Int>) -> Substring
+    public func substring(_ range: Range<Int>) -> String
 }
 ```
-
-Indexing uses **integer offsets** and view iterators — not opaque string indices.
 
 ## Building and joining
 
 ```ll
-public func join(_ parts: some Sequence<String>, separator: String = "") -> String
+// Prefer array join MVP:
+// ["a", "b"].joined(separator: ",")
 
 public struct StringBuilder {
     public init(capacity: Int = 0)
     public mutating func append(_ s: String)
-    public mutating func append(_ c: Unicode.Scalar)
     public func build() -> String
 }
 ```
@@ -49,20 +48,16 @@ public extension String {
 public extension String {
     public func contains(_ substring: String) -> Bool
     public func starts(with prefix: String) -> Bool
-    public func split(separator: String, maxSplits: Int = .max) -> [String]
-    public func trim(in set: CharacterSet = .whitespaceAndNewlines) -> String
+    public func split(separator: String) -> [String]
+    public func uppercased() -> String
+    public func lowercased() -> String
+    public func replacing(_ old: String, with new: String) -> String
 }
 ```
 
 ## Regular expressions
 
-```ll
-public struct Regex: Sendable {
-    public init(pattern: String) throws(RegexError)
-    public func firstMatch(in text: String) -> Match?
-    public func matches(in text: String) -> [Match]
-}
-```
+`Regex` is **Later** (not shipped). Prefer `contains` / `split` / explicit parsing for now.
 
 ## Encoding
 
@@ -77,26 +72,7 @@ public func decode(_ data: Data, as encoding: Encoding) throws(EncodingError) ->
 
 ## Formatting
 
-```ll
-public func format(_ template: String, _ args: any CVarArg...) -> String
-```
-
-Interpolated strings in source (`"\(x)"`) lower to `format` or specialized builders at compile time.
-
-## Unicode utilities
-
-```ll
-public struct Unicode {
-    public static func normalize(_ s: String, form: NormalizationForm) -> String
-    public static func isValidScalar(_ scalar: Unicode.Scalar) -> Bool
-}
-```
-
-## Performance notes
-
-- Prefer `Substring` when slicing large buffers repeatedly before materializing `String`.
-- `StringBuilder` avoids quadratic append on `+` chains.
-- Parsing hot paths share SIMD whitespace skipping with `Std.Json` scanners where applicable.
+Interpolated strings in source (`"\(x)"`) are the primary formatting path. A CVarArg-style `format(_:_…)` with `any` existentials is **Later**.
 
 ## See also
 

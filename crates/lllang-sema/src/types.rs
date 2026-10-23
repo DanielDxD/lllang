@@ -19,6 +19,11 @@ pub enum Ty {
     Array(Box<Ty>),
     Tuple(Vec<Ty>),
     Named(String),
+    /// `Result<T, E>` with typed payloads (not Int-erased).
+    Result {
+        ok: Box<Ty>,
+        err: Box<Ty>,
+    },
     Func {
         params: Vec<Ty>,
         ret: Box<Ty>,
@@ -58,6 +63,7 @@ impl Ty {
                 format!("({})", parts.join(", "))
             }
             Ty::Named(name) => name.clone(),
+            Ty::Result { ok, err } => format!("Result<{}, {}>", ok.display(), err.display()),
             Ty::Func { params, ret, throws } => {
                 let ps: Vec<_> = params.iter().map(|t| t.display()).collect();
                 let mut s = format!("({}) -> {}", ps.join(", "), ret.display());
@@ -99,6 +105,12 @@ impl Ty {
             (Ty::Struct(a), Ty::Struct(b)) if a == b => true,
             (Ty::Class(a), Ty::Class(b)) if a == b => true,
             (Ty::Enum(a), Ty::Enum(b)) if a == b => true,
+            (Ty::Result { ok: a, err: e }, Ty::Result { ok: b, err: f }) => {
+                a.assignable_from(b) && e.assignable_from(f)
+            }
+            (Ty::Enum(n), Ty::Result { .. }) | (Ty::Result { .. }, Ty::Enum(n)) if n == "Result" => {
+                true
+            }
             // Codable / Encodable / Decodable accept any concrete struct/class.
             (Ty::Named(n), Ty::Struct(_) | Ty::Class(_))
                 if n == "Encodable" || n == "Decodable" || n == "Codable" =>

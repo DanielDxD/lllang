@@ -1,88 +1,91 @@
 # Std.Async
 
-**Std.Async** provides tasks, structured concurrency, and channels. It builds on the language `async`/`await` model ([Concurrency](../language/12-concurrency.md)).
+**Std.Async** provides tasks, structured concurrency helpers, and channels. It builds on the language `async`/`await` model ([Concurrency](../language/12-concurrency.md)).
 
 ```ll
 import Std.Async
 ```
 
+## MVP surface (Phase 1.2)
+
+| API | Status |
+|-----|--------|
+| `await` on `Task` / zero-arg `async` calls / `async let` | Shipped (join / spawn+join) |
+| `await` on blocking builtins (`Http.get`, …) | Shipped (runs inline) |
+| `async let` + cancel on early exit | MVP (zero-arg async; best-effort cancel) |
+| `@run foo()` | Zero-arg free `-> Void` functions |
+| `Channel` / `WaitGroup` / `CancellationToken` | Shipped |
+| `TaskGroup` | Shipped MVP — see below |
+| `MainActor.drain()` | Shipped — see below |
+| `withTaskGroup` / valued task-group results | **Later** |
+| `withTimeout` / `AsyncSequence` / `runBlocking` | **Later** |
+
 ## Task
 
-```ll
-public struct Task<Success: Sendable> {
-    public static func detached(priority: TaskPriority = .medium, _ operation: @escaping () async throws(E) -> Success) -> Task<Success>
-    public static func `do`(priority: TaskPriority = .medium, _ operation: @escaping () async throws(E) -> Success) async throws(E) -> Success
-    public func cancel()
-    public var isCancelled: Bool { get async }
-    public func value() async throws(E) -> Success
-}
-```
-
-`Task.do` inherits cancellation and task-local context from the caller; `detached` does not.
-
-## Task groups
+Joinable handles from `@run` / `async let` / `await` of zero-arg async workers:
 
 ```ll
-public func withTaskGroup<ChildTask: Sendable, GroupResult>(
-    returning: GroupResult.Type,
-    body: (inout TaskGroup<ChildTask>) async throws(E) -> GroupResult
-) async throws(E) -> GroupResult
+// Fire-and-forget
+@run worker()
 
-public struct TaskGroup<Element: Sendable> {
-    public mutating func addTask(_ operation: @escaping () async throws(E) -> Element)
-    public mutating func next() async throws(E) -> Element?
-    public mutating func cancelAll()
-}
+// Structured: spawn at `async let`, join at `await`
+async let work = compute()
+await work
 ```
 
-## Channels
+`Task.cancel()` / `ll_task_cancel` is cooperative — workers must poll a `CancellationToken` or exit.
+
+## CancellationToken
 
 ```ll
-public struct Channel<Element: Sendable> {
-    public init(capacity: Int = 0)
-    public func send(_ element: Element) async throws(ChannelError)
-    public func receive() async throws(ChannelError) -> Element
-    public func close()
-}
+let token = CancellationToken()           // ctor sugar for `.create()`
+token.throwIfCancelled()                  // traps if cancelled
+// … work …
+token.cancel()
 ```
 
-Buffered (`capacity > 0`) vs unbuffered (handoff) semantics match async iteration patterns.
+Pass the token into cancellable work. There is no `fn.cancel()` on free functions — cancel via the token (or a `Task` handle).
 
-## Timeouts and cancellation
+## Channels / WaitGroup
 
 ```ll
-public func withTimeout<T: Sendable>(_ duration: Duration, _ operation: () async throws(E) -> T) async throws(E) -> T
+let ch = Channel.create(4)
+ch.send(42)
+let v = ch.receive()
+ch.close()
 
-public func withTaskCancellationHandler(
-    onCancel: @escaping () -> Void,
-    operation: () async throws(E) -> Void
-) async throws(E)
+let wg = WaitGroup.create()
+wg.add(1)
+wg.done()
+wg.wait()
 ```
 
-## Executors
+Channel MVP carries `Int` payloads.
+
+## TaskGroup
+
+Structured spawn+join for zero-arg free `-> Void` functions (MVP):
 
 ```ll
-public enum Executor {
-    public static func runOnMain(_ operation: @escaping () async -> Void)
-    public static func runBlocking<T>(_ operation: () async throws(E) -> T) throws(E) -> T
-}
+let g = TaskGroup()       // or TaskGroup.create()
+g.add(workerA)            // bare function ref — not workerA()
+g.add(workerB)
+g.wait()                  // joins all members
 ```
 
-Use `runBlocking` sparingly at FFI or legacy boundaries — prefer native async APIs.
+`TaskGroup.add` spawns each worker into the group; `wait` joins every handle. Capturing closures / returning values / `withTaskGroup` are **Later**.
 
-## AsyncSequence
+## MainActor drain vs UI loop
 
-```ll
-public protocol AsyncSequence {
-    associatedtype Element
-    associatedtype AsyncIterator: AsyncIteratorProtocol where AsyncIterator.Element == Element
-    func makeAsyncIterator() -> AsyncIterator
-}
+`MainActor.drain()` runs queued main-actor jobs **synchronously until the queue is empty**, then returns. It is a test/CLI helper, not a UI event loop:
 
-public func merge<T>(_ sequences: [some AsyncSequence<T>]) -> AsyncStream<T>
-```
+- **CLI / agents:** call `MainActor.drain()` after submitting work when you need the main queue flushed before exit.
+- **UI apps (Later):** a real run loop would keep draining as events arrive; do not spin `drain()` in a hot loop as a substitute for a platform UI loop.
+
+`$MAIN_ACTOR` is available as a compile-time constant where isolation attributes apply.
 
 ## See also
 
 - [Sync](sync.md) — mutexes vs actors
 - [Http](http.md) — async client
+- [Concurrency](../language/12-concurrency.md)

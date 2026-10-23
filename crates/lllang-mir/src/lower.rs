@@ -39,9 +39,11 @@ pub fn emit_mir(program: &Program) -> String {
                 fields,
                 parent,
                 virtual_methods,
+                weak_fields,
+                unowned_fields,
             } => {
                 out.push_str(&format!(
-                    "class {name} extends {parent:?} virt={virtual_methods:?} {{"
+                    "class {name} extends {parent:?} virt={virtual_methods:?} weak={weak_fields:?} unowned={unowned_fields:?} {{"
                 ));
                 for (n, t) in fields {
                     out.push_str(&format!(" {n}: {t:?},"));
@@ -97,6 +99,10 @@ struct FuncLower<'a> {
     func_throws: Option<MirTy>,
     /// Receiver type for the function being lowered (methods only).
     self_ty: Option<MirTy>,
+    /// Stack of (continue_target, break_target) for nested loops.
+    loop_stack: Vec<(usize, usize)>,
+    /// LIFO deferred cleanup bodies (function scope MVP).
+    defer_stack: Vec<Body>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -144,7 +150,16 @@ impl<'a> Lowerer<'a> {
                             .collect(),
                     );
                 }
-                HirTypeDef::Protocol { .. } => {}
+                HirTypeDef::Protocol { name, methods, .. } => {
+                    // Existential dispatch: protocol method order = vtable slots.
+                    virtual_slots.insert(
+                        name.clone(),
+                        methods.iter().map(|m| m.name.clone()).collect(),
+                    );
+                    // Existentials are class-like pointers.
+                    is_class.insert(name.clone(), true);
+                    type_fields.insert(name.clone(), vec![]);
+                }
             }
         }
         Self {
@@ -206,6 +221,8 @@ impl<'a> Lowerer<'a> {
             err_slot_ty: MirTy::Named("void*".into()),
             func_throws: throws.clone(),
             self_ty: f.self_ty.as_ref().map(MirTy::from_hir),
+            loop_stack: vec![],
+            defer_stack: vec![],
         };
 
         let mut param_locals = Vec::new();
@@ -280,13 +297,31 @@ fn map_type_def(td: &HirTypeDef) -> TypeDef {
             fields,
             parent,
             virtual_methods,
+            weak_fields,
+            unowned_fields,
             ..
-        } => TypeDef::Class {
-            name: name.clone(),
-            fields: fields.iter().map(|(n, t)| (n.clone(), MirTy::from_hir(t))).collect(),
-            parent: parent.clone(),
-            virtual_methods: virtual_methods.clone(),
-        },
+        } => {
+            let mir_fields: Vec<(String, MirTy)> = fields
+                .iter()
+                .map(|(n, t)| (n.clone(), MirTy::from_hir(t)))
+                .collect();
+            let weak_idx: Vec<usize> = weak_fields
+                .iter()
+                .filter_map(|w| mir_fields.iter().position(|(n, _)| n == w))
+                .collect();
+            let unowned_idx: Vec<usize> = unowned_fields
+                .iter()
+                .filter_map(|w| mir_fields.iter().position(|(n, _)| n == w))
+                .collect();
+            TypeDef::Class {
+                name: name.clone(),
+                fields: mir_fields,
+                parent: parent.clone(),
+                virtual_methods: virtual_methods.clone(),
+                weak_fields: weak_idx,
+                unowned_fields: unowned_idx,
+            }
+        }
         HirTypeDef::Enum { name, cases, .. } => TypeDef::Enum {
             name: name.clone(),
             cases: cases
@@ -297,9 +332,14 @@ fn map_type_def(td: &HirTypeDef) -> TypeDef {
                 })
                 .collect(),
         },
-        HirTypeDef::Protocol { name, .. } => TypeDef::Struct {
+        // Protocol as existential container: empty class-like layout (vtable only when needed).
+        HirTypeDef::Protocol { name, methods, .. } => TypeDef::Class {
             name: name.clone(),
             fields: vec![],
+            parent: None,
+            virtual_methods: methods.iter().map(|m| m.name.clone()).collect(),
+            weak_fields: vec![],
+            unowned_fields: vec![],
         },
     }
 }
@@ -394,8 +434,21 @@ impl FuncLower<'_> {
     }
 
     /// Nested then/else/loop bodies must not synthesize a function `return`.
+    /// Defers registered inside the nested body run when the block ends (scope-accurate `#defer`).
     fn lower_nested_body(&mut self, body: &Body, ret_ty: &MirTy) {
+        let defer_mark = self.defer_stack.len();
         self.lower_stmts(body, ret_ty, false);
+        // If the nested body already returned/threw, finish_return already ran all defers.
+        if matches!(
+            self.blocks[self.cur_block].term,
+            Terminator::Return(_) | Terminator::Throw(_) | Terminator::Unreachable
+        ) {
+            return;
+        }
+        let deferred: Vec<Body> = self.defer_stack.drain(defer_mark..).rev().collect();
+        for d in deferred {
+            self.lower_nested_body(&d, ret_ty);
+        }
     }
 
     fn lower_stmts(&mut self, body: &Body, ret_ty: &MirTy, implicit_return: bool) {
@@ -424,7 +477,15 @@ impl FuncLower<'_> {
         }
     }
 
+    fn run_defers(&mut self, ret_ty: &MirTy) {
+        let deferred: Vec<Body> = self.defer_stack.iter().rev().cloned().collect();
+        for body in deferred {
+            self.lower_nested_body(&body, ret_ty);
+        }
+    }
+
     fn finish_return(&mut self, val: Option<Value>, ret_ty: &MirTy) {
+        self.run_defers(ret_ty);
         let returned = match &val {
             Some(Value::Local(l)) => Some(*l),
             _ => None,
@@ -445,7 +506,12 @@ impl FuncLower<'_> {
 
     fn lower_stmt(&mut self, stmt: &Stmt, ret_ty: &MirTy) {
         match stmt {
-            Stmt::Let { name, ty, init } => {
+            Stmt::Let {
+                name,
+                ty,
+                init,
+                async_let_result: _,
+            } => {
                 let mty = MirTy::from_hir(ty);
                 let loc = self.alloc_local(mty.clone());
                 let v = self.lower_expr(init, &mty);
@@ -463,16 +529,36 @@ impl FuncLower<'_> {
                 self.track_refcounted(loc, &mty);
                 self.bind_local(name, loc, mty);
             }
-            Stmt::Assign { target, value } => {
-                let (base, field_idx, fty) = self.resolve_lvalue(target);
-                let v = self.lower_expr(value, &fty);
-                if let Some((loc, _)) = base {
-                    self.emit(Inst::SetField {
-                        base: Value::Local(loc),
-                        index: field_idx,
-                        val: v,
+            Stmt::Assign { target, value } => match target {
+                Expr::Local(name) | Expr::Param(name) => {
+                    let (loc, ty) = self.lookup(name).expect("assign local");
+                    let v = self.lower_expr(value, &ty);
+                    self.emit(Inst::Store { dst: loc, val: v });
+                }
+                Expr::Member { .. } => {
+                    let (base, field_idx, fty) = self.resolve_lvalue(target);
+                    let v = self.lower_expr(value, &fty);
+                    if let Some((loc, _)) = base {
+                        self.emit(Inst::SetField {
+                            base: Value::Local(loc),
+                            index: field_idx,
+                            val: v,
+                        });
+                    }
+                }
+                Expr::Index { base, index, ty } => {
+                    let arr_ty = MirTy::Array(Box::new(MirTy::from_hir(ty)));
+                    let arr = self.lower_expr(base, &arr_ty);
+                    let idx = self.lower_expr(index, &MirTy::Int);
+                    let v = self.lower_expr(value, &MirTy::from_hir(ty));
+                    self.emit(Inst::Call {
+                        dst: None,
+                        callee: Callee::Builtin("ll_array_set_i64".into()),
+                        args: vec![arr, idx, v],
+                        ty: MirTy::Void,
                     });
                 }
+                other => panic!("unsupported assignment target {:?}", other),
             }
             Stmt::Expr(e) => {
                 let ty = expr_mir_ty(e);
@@ -483,6 +569,7 @@ impl FuncLower<'_> {
                 self.finish_return(v, ret_ty);
             }
             Stmt::Throw(e) => {
+                self.run_defers(ret_ty);
                 let et = expr_mir_ty(e);
                 let v = self.lower_expr(e, &et);
                 self.set_term(Terminator::Throw(v));
@@ -544,6 +631,7 @@ impl FuncLower<'_> {
                 let head = self.fresh_block();
                 let body_b = self.fresh_block();
                 let exit = self.fresh_block();
+                self.loop_stack.push((head, exit));
                 self.set_term(Terminator::Jump(head));
                 self.switch_block(head);
                 let cv = self.lower_expr(cond, &MirTy::Bool);
@@ -556,11 +644,206 @@ impl FuncLower<'_> {
                 self.lower_nested_body(body, ret_ty);
                 if !matches!(
                     self.blocks[self.cur_block].term,
-                    Terminator::Return(_) | Terminator::Throw(_)
+                    Terminator::Return(_) | Terminator::Throw(_) | Terminator::Jump(_)
                 ) {
                     self.set_term(Terminator::Jump(head));
                 }
+                self.loop_stack.pop();
                 self.switch_block(exit);
+            }
+            Stmt::For {
+                name,
+                start,
+                end,
+                inclusive,
+                body,
+            } => {
+                // Desugar: var i = start; while i < end (or <= if inclusive) { body; i = i + 1 }
+                let i_loc = self.alloc_local(MirTy::Int);
+                let sv = self.lower_expr(start, &MirTy::Int);
+                self.emit(Inst::Store { dst: i_loc, val: sv });
+                self.bind_local(name, i_loc, MirTy::Int);
+                let end_v = self.lower_expr(end, &MirTy::Int);
+                let end_loc = self.materialize_to_local(end_v, &MirTy::Int);
+                let head = self.fresh_block();
+                let body_b = self.fresh_block();
+                let cont = self.fresh_block();
+                let exit = self.fresh_block();
+                self.loop_stack.push((cont, exit));
+                self.set_term(Terminator::Jump(head));
+                self.switch_block(head);
+                let cmp = self.alloc_local(MirTy::Bool);
+                self.emit(Inst::Binary {
+                    dst: cmp,
+                    op: if *inclusive { BinOp::Le } else { BinOp::Lt },
+                    left: Value::Local(i_loc),
+                    right: Value::Local(end_loc),
+                    ty: MirTy::Bool,
+                });
+                self.set_term(Terminator::Branch {
+                    cond: Value::Local(cmp),
+                    then_b: body_b,
+                    else_b: exit,
+                });
+                self.switch_block(body_b);
+                self.lower_nested_body(body, ret_ty);
+                if !matches!(
+                    self.blocks[self.cur_block].term,
+                    Terminator::Return(_) | Terminator::Throw(_) | Terminator::Jump(_)
+                ) {
+                    self.set_term(Terminator::Jump(cont));
+                }
+                self.switch_block(cont);
+                let one = Value::ConstInt(1);
+                let next = self.alloc_local(MirTy::Int);
+                self.emit(Inst::Binary {
+                    dst: next,
+                    op: BinOp::Add,
+                    left: Value::Local(i_loc),
+                    right: one,
+                    ty: MirTy::Int,
+                });
+                self.emit(Inst::Store {
+                    dst: i_loc,
+                    val: Value::Local(next),
+                });
+                self.set_term(Terminator::Jump(head));
+                self.loop_stack.pop();
+                self.switch_block(exit);
+            }
+            Stmt::ForEach { name, array, body } => {
+                let elem_mir = match expr_mir_ty(array) {
+                    MirTy::Array(inner) => *inner,
+                    _ => MirTy::Int,
+                };
+                let is_ptr = matches!(elem_mir, MirTy::String | MirTy::Class(_) | MirTy::Named(_));
+                let arr_ty = MirTy::Array(Box::new(elem_mir.clone()));
+                let arr_v = self.lower_expr(array, &arr_ty);
+                let arr_loc = self.materialize_to_local(arr_v, &arr_ty);
+                let count = self.alloc_local(MirTy::Int);
+                self.emit(Inst::Call {
+                    dst: Some(count),
+                    callee: Callee::Builtin("ll_array_count".into()),
+                    args: vec![Value::Local(arr_loc)],
+                    ty: MirTy::Int,
+                });
+                let i_loc = self.alloc_local(MirTy::Int);
+                self.emit(Inst::Store {
+                    dst: i_loc,
+                    val: Value::ConstInt(0),
+                });
+                let head = self.fresh_block();
+                let body_b = self.fresh_block();
+                let cont = self.fresh_block();
+                let exit = self.fresh_block();
+                self.loop_stack.push((cont, exit));
+                self.set_term(Terminator::Jump(head));
+                self.switch_block(head);
+                let cmp = self.alloc_local(MirTy::Bool);
+                self.emit(Inst::Binary {
+                    dst: cmp,
+                    op: BinOp::Lt,
+                    left: Value::Local(i_loc),
+                    right: Value::Local(count),
+                    ty: MirTy::Bool,
+                });
+                self.set_term(Terminator::Branch {
+                    cond: Value::Local(cmp),
+                    then_b: body_b,
+                    else_b: exit,
+                });
+                self.switch_block(body_b);
+                let elem = self.alloc_local(elem_mir.clone());
+                let get_fn = if is_ptr {
+                    "ll_array_get_ref"
+                } else {
+                    "ll_array_get_i64"
+                };
+                self.emit(Inst::Call {
+                    dst: Some(elem),
+                    callee: Callee::Builtin(get_fn.into()),
+                    args: vec![Value::Local(arr_loc), Value::Local(i_loc)],
+                    ty: elem_mir.clone(),
+                });
+                self.bind_local(name, elem, elem_mir);
+                self.lower_nested_body(body, ret_ty);
+                if !matches!(
+                    self.blocks[self.cur_block].term,
+                    Terminator::Return(_) | Terminator::Throw(_) | Terminator::Jump(_)
+                ) {
+                    self.set_term(Terminator::Jump(cont));
+                }
+                self.switch_block(cont);
+                let next = self.alloc_local(MirTy::Int);
+                self.emit(Inst::Binary {
+                    dst: next,
+                    op: BinOp::Add,
+                    left: Value::Local(i_loc),
+                    right: Value::ConstInt(1),
+                    ty: MirTy::Int,
+                });
+                self.emit(Inst::Store {
+                    dst: i_loc,
+                    val: Value::Local(next),
+                });
+                self.set_term(Terminator::Jump(head));
+                self.loop_stack.pop();
+                self.switch_block(exit);
+            }
+            Stmt::Break => {
+                let (_, exit) = self.loop_stack.last().copied().expect("break outside loop");
+                self.set_term(Terminator::Jump(exit));
+            }
+            Stmt::Continue => {
+                let (cont, _) = self.loop_stack.last().copied().expect("continue outside loop");
+                self.set_term(Terminator::Jump(cont));
+            }
+            Stmt::Defer { body } => {
+                self.defer_stack.push(body.clone());
+            }
+            Stmt::Scope { body } => {
+                self.lower_nested_body(body, ret_ty);
+            }
+            Stmt::Die { message } => {
+                self.run_defers(ret_ty);
+                let msg = self.alloc_local(MirTy::String);
+                self.emit(Inst::StringLit {
+                    dst: msg,
+                    value: message.clone(),
+                });
+                let kind = self.alloc_local(MirTy::String);
+                self.emit(Inst::StringLit {
+                    dst: kind,
+                    value: "die".into(),
+                });
+                // ll_trap takes cstr — use string handles via a thin wrapper path:
+                // emit call with builtin that codegen maps to ll_trap with cstr extracts.
+                self.emit(Inst::Call {
+                    dst: None,
+                    callee: Callee::Builtin("ll_die".into()),
+                    args: vec![Value::Local(msg)],
+                    ty: MirTy::Void,
+                });
+                self.set_term(Terminator::Unreachable);
+            }
+            Stmt::Run { func } => {
+                let dst = self.alloc_local(MirTy::Named("Task".into()));
+                self.emit(Inst::Call {
+                    dst: Some(dst),
+                    callee: Callee::TaskSpawn {
+                        name: mir_func_name(func),
+                        returns_value: false,
+                    },
+                    args: vec![],
+                    ty: MirTy::Named("Task".into()),
+                });
+                // Detach fire-and-forget.
+                self.emit(Inst::Call {
+                    dst: None,
+                    callee: Callee::Builtin("ll_task_detach".into()),
+                    args: vec![Value::Local(dst)],
+                    ty: MirTy::Void,
+                });
             }
         }
     }
@@ -633,7 +916,7 @@ impl FuncLower<'_> {
                     Value::Local(loc)
                 }
             }
-            Expr::Self_ => {
+            Expr::Self_ | Expr::Super => {
                 let (src, ty) = self.lookup("self").expect("self");
                 if ty.is_refcounted() {
                     self.emit(Inst::Retain(Value::Local(src)));
@@ -652,8 +935,27 @@ impl FuncLower<'_> {
                 Value::Local(dst)
             }
             Expr::Binary { op, left, right, ty } => {
-                let l = self.lower_expr(left, expected);
-                let r = self.lower_expr(right, expected);
+                // Short-circuit boolean `and` / `or`.
+                if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                    return self.lower_short_circuit(*op, left, right);
+                }
+                // String concatenation.
+                if *op == BinaryOp::Add && matches!(ty, Ty::String) {
+                    let l = self.lower_expr(left, &MirTy::String);
+                    let r = self.lower_expr(right, &MirTy::String);
+                    let dst = self.alloc_local(MirTy::String);
+                    self.emit(Inst::Call {
+                        dst: Some(dst),
+                        callee: Callee::Builtin("ll_string_concat".into()),
+                        args: vec![l, r],
+                        ty: MirTy::String,
+                    });
+                    return Value::Local(dst);
+                }
+                let lty = expr_mir_ty(left);
+                let rty = expr_mir_ty(right);
+                let l = self.lower_expr(left, &lty);
+                let r = self.lower_expr(right, &rty);
                 let dst = self.alloc_local(MirTy::from_hir(ty));
                 self.emit(Inst::Binary {
                     dst,
@@ -667,6 +969,7 @@ impl FuncLower<'_> {
             Expr::IfExpr { cond, then_e, else_e, ty } => {
                 let cv = self.lower_expr(cond, &MirTy::Bool);
                 let mty = MirTy::from_hir(ty);
+                let dst = self.alloc_local(mty.clone());
                 let then_b = self.fresh_block();
                 let else_b = self.fresh_block();
                 let merge = self.fresh_block();
@@ -677,21 +980,13 @@ impl FuncLower<'_> {
                 });
                 self.switch_block(then_b);
                 let tv = self.lower_expr(then_e, &mty);
-                let tloc = self.materialize_to_local(tv, &mty);
+                self.emit(Inst::Store { dst, val: tv });
                 self.set_term(Terminator::Jump(merge));
                 self.switch_block(else_b);
                 let ev = self.lower_expr(else_e, &mty);
-                let eloc = self.materialize_to_local(ev, &mty);
+                self.emit(Inst::Store { dst, val: ev });
                 self.set_term(Terminator::Jump(merge));
                 self.switch_block(merge);
-                let dst = self.alloc_local(mty.clone());
-                // Phi simplified: use merge block with two predecessors storing — for MVP use tloc only
-                // Phase 2: emit select via duplicate stores in predecessor blocks
-                self.emit(Inst::Store {
-                    dst,
-                    val: Value::Local(tloc),
-                });
-                let _ = eloc;
                 Value::Local(dst)
             }
             Expr::OptionalSome(inner) => {
@@ -765,9 +1060,151 @@ impl FuncLower<'_> {
             Expr::Switch { subject, arms, ty } => self.lower_switch(subject, arms, ty),
             Expr::Cast { expr, to } => {
                 let from_ty = expr_mir_ty(expr);
-                self.lower_expr(expr, &from_ty)
+                let to_ty = MirTy::from_hir(to);
+                let v = self.lower_expr(expr, &from_ty);
+                if from_ty == to_ty {
+                    return v;
+                }
+                // Numeric / representation casts: materialize into a local of the target MIR type.
+                // LLVM bitcasts / sitofp are applied when types differ at codegen of Store.
+                let dst = self.alloc_local(to_ty.clone());
+                self.emit(Inst::Store { dst, val: v });
+                Value::Local(dst)
+            }
+            Expr::ArrayLit { elems, elem_ty } => {
+                let use_ptr = !matches!(elem_ty, Ty::Int);
+                let mir_elem = if matches!(elem_ty, Ty::Int) {
+                    MirTy::Int
+                } else if matches!(elem_ty, Ty::String) {
+                    MirTy::String
+                } else {
+                    MirTy::from_hir(elem_ty)
+                };
+                let arr_ty = MirTy::Array(Box::new(mir_elem.clone()));
+                let dst = self.alloc_local(arr_ty.clone());
+                let new_fn = if use_ptr {
+                    "ll_array_new_ptr"
+                } else {
+                    "ll_array_new_i64"
+                };
+                let append_fn = if use_ptr {
+                    "ll_array_append_ptr"
+                } else {
+                    "ll_array_append_i64"
+                };
+                self.emit(Inst::Call {
+                    dst: Some(dst),
+                    callee: Callee::Builtin(new_fn.into()),
+                    args: vec![],
+                    ty: arr_ty.clone(),
+                });
+                self.track_refcounted(dst, &arr_ty);
+                for el in elems {
+                    let v = self.lower_expr(el, &mir_elem);
+                    self.emit(Inst::Call {
+                        dst: None,
+                        callee: Callee::Builtin(append_fn.into()),
+                        args: vec![Value::Local(dst), v],
+                        ty: MirTy::Void,
+                    });
+                }
+                Value::Local(dst)
+            }
+            Expr::DictLit { entries } => {
+                let dst = self.alloc_local(MirTy::Named("Dictionary".into()));
+                self.emit(Inst::Call {
+                    dst: Some(dst),
+                    callee: Callee::Builtin("ll_dict_new".into()),
+                    args: vec![],
+                    ty: MirTy::Named("Dictionary".into()),
+                });
+                self.track_refcounted(dst, &MirTy::Named("Dictionary".into()));
+                for (k, v) in entries {
+                    let kv = self.lower_expr(k, &MirTy::String);
+                    let vv = self.lower_expr(v, &MirTy::String);
+                    self.emit(Inst::Call {
+                        dst: None,
+                        callee: Callee::Builtin("ll_dict_set".into()),
+                        args: vec![Value::Local(dst), kv, vv],
+                        ty: MirTy::Void,
+                    });
+                }
+                Value::Local(dst)
+            }
+            Expr::Index { base, index, ty } => {
+                let mir_ty = MirTy::from_hir(ty);
+                let arr_ty = MirTy::Array(Box::new(mir_ty.clone()));
+                let arr = self.lower_expr(base, &arr_ty);
+                let idx = self.lower_expr(index, &MirTy::Int);
+                let dst = self.alloc_local(mir_ty.clone());
+                let get_fn = if matches!(mir_ty, MirTy::String) {
+                    "ll_array_get_ref"
+                } else {
+                    "ll_array_get_i64"
+                };
+                self.emit(Inst::Call {
+                    dst: Some(dst),
+                    callee: Callee::Builtin(get_fn.into()),
+                    args: vec![arr, idx],
+                    ty: mir_ty,
+                });
+                Value::Local(dst)
+            }
+            Expr::FuncRef { name, .. } => {
+                // Function refs are resolved at call sites via Callee::Func; as values they
+                // are represented as a string name handle for now (callable via Check Call).
+                let dst = self.alloc_local(MirTy::String);
+                self.emit(Inst::StringLit {
+                    dst,
+                    value: name.clone(),
+                });
+                Value::Local(dst)
             }
         }
+    }
+
+    fn lower_short_circuit(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> Value {
+        let dst = self.alloc_local(MirTy::Bool);
+        let lv = self.lower_expr(left, &MirTy::Bool);
+        let then_b = self.fresh_block();
+        let else_b = self.fresh_block();
+        let merge = self.fresh_block();
+        self.set_term(Terminator::Branch {
+            cond: lv,
+            then_b,
+            else_b,
+        });
+        match op {
+            BinaryOp::And => {
+                // true && rhs → rhs; false && _ → false
+                self.switch_block(then_b);
+                let rv = self.lower_expr(right, &MirTy::Bool);
+                self.emit(Inst::Store { dst, val: rv });
+                self.set_term(Terminator::Jump(merge));
+                self.switch_block(else_b);
+                self.emit(Inst::Store {
+                    dst,
+                    val: Value::ConstBool(false),
+                });
+                self.set_term(Terminator::Jump(merge));
+            }
+            BinaryOp::Or => {
+                // true || _ → true; false || rhs → rhs
+                self.switch_block(then_b);
+                self.emit(Inst::Store {
+                    dst,
+                    val: Value::ConstBool(true),
+                });
+                self.set_term(Terminator::Jump(merge));
+                self.switch_block(else_b);
+                let rv = self.lower_expr(right, &MirTy::Bool);
+                self.emit(Inst::Store { dst, val: rv });
+                self.set_term(Terminator::Jump(merge));
+            }
+            _ => unreachable!("lower_short_circuit only for And/Or"),
+        }
+        self.switch_block(merge);
+        Value::Local(dst)
     }
 
     fn materialize_to_local(&mut self, v: Value, ty: &MirTy) -> Local {
@@ -850,6 +1287,15 @@ impl FuncLower<'_> {
             HirCallee::Method { receiver, .. } | HirCallee::Virtual { receiver, .. } => {
                 let rty = expr_mir_ty(receiver);
                 mir_args.push(self.lower_expr(receiver, &rty));
+            }
+            HirCallee::SuperMethod { .. } => {
+                // `super.foo` passes the same `self` receiver as a static parent call.
+                if let Some((src, ty)) = self.lookup("self") {
+                    if ty.is_refcounted() {
+                        self.emit(Inst::Retain(Value::Local(src)));
+                    }
+                    mir_args.push(Value::Local(src));
+                }
             }
             _ => {}
         }
@@ -946,7 +1392,35 @@ impl FuncLower<'_> {
                 self.switch_block(merge);
                 Value::Local(opt)
             }
-            TryKind::Try | TryKind::TryForce => {
+            TryKind::TryForce => {
+                let ok_b = self.fresh_block();
+                let die_b = self.fresh_block();
+                self.set_term(Terminator::Branch {
+                    cond: Value::Local(flag),
+                    then_b: die_b,
+                    else_b: ok_b,
+                });
+                self.switch_block(die_b);
+                let msg = self.alloc_local(MirTy::String);
+                self.emit(Inst::StringLit {
+                    dst: msg,
+                    value: "try! failed".into(),
+                });
+                self.emit(Inst::Call {
+                    dst: None,
+                    callee: Callee::Builtin("ll_die".into()),
+                    args: vec![Value::Local(msg)],
+                    ty: MirTy::Void,
+                });
+                self.set_term(Terminator::Unreachable);
+                self.switch_block(ok_b);
+                if let Some(d) = dst {
+                    Value::Local(d)
+                } else {
+                    Value::Nil
+                }
+            }
+            TryKind::Try => {
                 if let Some(d) = dst {
                     Value::Local(d)
                 } else {
@@ -1049,6 +1523,10 @@ impl FuncLower<'_> {
                 let rt = static_method_name(receiver, name, self);
                 (Callee::Func(rt), None)
             }
+            HirCallee::SuperMethod { parent, name } => {
+                let mangled = format!("{parent}_{name}");
+                (Callee::Func(mangled), None)
+            }
             HirCallee::Virtual { receiver, name } => {
                 let class = receiver_type_name(receiver, self).unwrap_or_else(|| "Object".into());
                 let slot = self
@@ -1066,6 +1544,25 @@ impl FuncLower<'_> {
                     None,
                 )
             }
+            HirCallee::TaskSpawn { name, returns_value } => (
+                Callee::TaskSpawn {
+                    name: mir_func_name(name),
+                    returns_value: *returns_value,
+                },
+                None,
+            ),
+            HirCallee::TaskGroupAdd { name } => (
+                Callee::TaskGroupAdd {
+                    name: mir_func_name(name),
+                },
+                None,
+            ),
+            HirCallee::HttpServe { handler } => (
+                Callee::HttpServe {
+                    handler: mir_func_name(handler),
+                },
+                None,
+            ),
         }
     }
 
@@ -1214,7 +1711,7 @@ impl FuncLower<'_> {
         for arm in arms {
             let bb = self.fresh_block();
             arm_blocks.push((bb, arm));
-            let key = pattern_key(&arm.pattern, &sub_ty);
+            let key = pattern_key(&arm.pattern, &sub_ty, self);
             if let Some(k) = key {
                 switch_arms.push((k, bb));
             }
@@ -1292,9 +1789,50 @@ fn map_builtin(id: &str) -> String {
         "toon_decode" => "ll_toon_decode".into(),
         "toon_encode" => "ll_toon_encode".into(),
         "http_get" => "ll_http_get".into(),
+        "http_post" => "ll_http_post".into(),
+        "log_debug" => "ll_log_debug".into(),
+        "log_info" => "ll_log_info".into(),
+        "log_warn" => "ll_log_warn".into(),
+        "log_error" => "ll_log_error".into(),
+        "cli_usage" => "ll_cli_usage".into(),
+        "cli_has_flag" => "ll_cli_has_flag".into(),
+        "tcp_connect" => "ll_tcp_connect".into(),
+        "tcp_read" => "ll_tcp_read".into(),
+        "tcp_write" => "ll_tcp_write".into(),
+        "tcp_close" => "ll_tcp_close".into(),
+        "mutex_create" => "ll_mutex_create".into(),
+        "mutex_lock" => "ll_mutex_lock".into(),
+        "mutex_unlock" => "ll_mutex_unlock".into(),
+        "task_spawn" => "ll_task_spawn".into(),
+        "task_spawn_ret" => "ll_task_spawn_ret".into(),
+        "task_join" => "ll_task_join".into(),
+        "task_join_ret" => "ll_task_join_ret".into(),
+        "task_detach" => "ll_task_detach".into(),
+        "task_cancel" => "ll_task_cancel".into(),
+        "channel_create" => "ll_channel_create".into(),
+        "channel_send_i64" => "ll_channel_send_i64".into(),
+        "channel_recv_i64" => "ll_channel_recv_i64".into(),
+        "channel_close" => "ll_channel_close".into(),
+        "wait_group_create" => "ll_wait_group_create".into(),
+        "wait_group_add" => "ll_wait_group_add".into(),
+        "wait_group_done" => "ll_wait_group_done".into(),
+        "wait_group_wait" => "ll_wait_group_wait".into(),
+        "task_group_create" => "ll_task_group_create".into(),
+        "task_group_wait" => "ll_task_group_wait".into(),
+        "regex_is_match" => "ll_regex_is_match".into(),
+        "cancellation_token_create" => "ll_cancellation_token_create".into(),
+        "cancellation_token_cancel" => "ll_cancellation_token_cancel".into(),
+        "cancellation_token_throw_if_cancelled" => "ll_cancellation_token_throw_if_cancelled".into(),
+        "sql_open" => "ll_sql_open".into(),
+        "sql_exec" => "ll_sql_exec".into(),
+        "sql_close" => "ll_sql_close".into(),
+        "main_actor_drain" => "ll_main_actor_drain".into(),
+        "ll_task_detach" => "ll_task_detach".into(),
+        "crypto_sha256" => "ll_crypto_sha256".into(),
         "llm_run_agent" => "ll_llm_run_agent".into(),
         "llm_merge_context" => "ll_llm_merge_context".into(),
         "ll_noop" => "ll_noop".into(),
+        "ll_c_strlen" => "ll_c_strlen".into(),
         "test_expect" => "ll_test_expect".into(),
         "test_expect_bare" => "ll_test_expect".into(),
         "test_expect_empty" => "ll_test_expect_empty".into(),
@@ -1302,6 +1840,93 @@ fn map_builtin(id: &str) -> String {
         "test_contains" => "ll_test_contains".into(),
         "test_approx" => "ll_test_approx".into(),
         "test_job_id" => "ll_test_job_id".into(),
+        "array_count" => "ll_array_count".into(),
+        "array_append_i64" => "ll_array_append_i64".into(),
+        "array_sorted_i64" => "ll_array_sorted_i64".into(),
+        "set_union" => "ll_set_union".into(),
+        "set_intersection" => "ll_set_intersection".into(),
+        "set_difference" => "ll_set_difference".into(),
+        "ll_array_new_i64" => "ll_array_new_i64".into(),
+        "ll_array_append_i64" => "ll_array_append_i64".into(),
+        "ll_array_get_i64" => "ll_array_get_i64".into(),
+        "ll_array_set_i64" => "ll_array_set_i64".into(),
+        "ll_array_count" => "ll_array_count".into(),
+        "ll_die" => "ll_die".into(),
+        "eprint" => "ll_eprint".into(),
+        "read_line" => "ll_read_line".into(),
+        "fatal_error" => "ll_fatal_error".into(),
+        "assert" => "ll_assert".into(),
+        "env_get" => "ll_env_get".into(),
+        "env_load_dotenv" => "ll_env_load_dotenv".into(),
+        "env_string_or" => "ll_env_get_string_or".into(),
+        "env_get_i64" => "ll_env_get_i64".into(),
+        "env_get_i64_or" => "ll_env_get_i64_or".into(),
+        "env_get_bool" => "ll_env_get_bool".into(),
+        "env_get_bool_or" => "ll_env_get_bool_or".into(),
+        "env_get_f64" => "ll_env_get_f64".into(),
+        "env_get_f64_or" => "ll_env_get_f64_or".into(),
+        "env_get_decimal" => "ll_env_get_decimal".into(),
+        "env_get_decimal_or" => "ll_env_get_decimal_or".into(),
+        "string_upper" => "ll_string_upper".into(),
+        "string_lower" => "ll_string_lower".into(),
+        "string_replace" => "ll_string_replace".into(),
+        "string_join" => "ll_string_join".into(),
+        "identity_uuid" => "ll_identity_uuid".into(),
+        "identity_ulid" => "ll_identity_ulid".into(),
+        "identity_nanoid" => "ll_identity_nanoid".into(),
+        "identity_parse" => "ll_identity_parse".into(),
+        "identity_short_id" => "ll_identity_short_id".into(),
+        "crypto_hmac_sha256" => "ll_crypto_hmac_sha256".into(),
+        "log_debug_fields" => "ll_log_debug_fields".into(),
+        "http_server_listen" => "ll_http_server_listen".into(),
+        "arena_create" => "ll_arena_create".into(),
+        "run_blocking_noop" => "ll_run_blocking_noop".into(),
+        "with_timeout_ms" => "ll_with_timeout_ms".into(),
+        "math_abs_i64" => "ll_math_abs_i64".into(),
+        "math_max_i64" => "ll_math_max_i64".into(),
+        "math_min_i64" => "ll_math_min_i64".into(),
+        "math_clamp_i64" => "ll_math_clamp_i64".into(),
+        "math_sqrt" => "ll_math_sqrt".into(),
+        "math_pow" => "ll_math_pow".into(),
+        "math_sin" => "ll_math_sin".into(),
+        "math_log10" => "ll_math_log10".into(),
+        "math_pi" => "ll_math_pi".into(),
+        "decimal_from_string" => "ll_decimal_from_string".into(),
+        "decimal_add" => "ll_decimal_add".into(),
+        "decimal_sub" => "ll_decimal_sub".into(),
+        "decimal_mul" => "ll_decimal_mul".into(),
+        "base64_encode" => "ll_base64_encode".into(),
+        "hex_encode" => "ll_hex_encode".into(),
+        "secure_random_bytes" => "ll_secure_random_bytes".into(),
+        "process_start" => "ll_process_start".into(),
+        "process_wait" => "ll_process_wait".into(),
+        "args_count" => "ll_args_count".into(),
+        "args_get" => "ll_args_get".into(),
+        "file_exists" => "ll_file_exists".into(),
+        "file_read_text" => "ll_file_read_text".into(),
+        "file_write_text" => "ll_file_write_text".into(),
+        "instant_now_ms" => "ll_instant_now_ms".into(),
+        "process_exit" => "ll_process_exit".into(),
+        "sleep_ms" => "ll_sleep_ms".into(),
+        "string_contains" => "ll_string_contains".into(),
+        "string_trim" => "ll_string_trim".into(),
+        "string_substring" => "ll_string_substring".into(),
+        "string_split" => "ll_string_split".into(),
+        "dict_new" => "ll_dict_new".into(),
+        "dict_set" => "ll_dict_set".into(),
+        "dict_get" => "ll_dict_get".into(),
+        "dict_keys" => "ll_dict_keys".into(),
+        "dict_contains" => "ll_dict_contains".into(),
+        "dict_count" => "ll_dict_count".into(),
+        "set_new" => "ll_set_new".into(),
+        "set_insert" => "ll_set_insert".into(),
+        "set_contains" => "ll_set_contains".into(),
+        "set_count" => "ll_set_count".into(),
+        "ll_array_new_ptr" => "ll_array_new_ptr".into(),
+        "ll_array_append_ptr" => "ll_array_append_ptr".into(),
+        "ll_array_get_ref" => "ll_array_get_ref".into(),
+        "ll_dict_new" => "ll_dict_new".into(),
+        "ll_dict_set" => "ll_dict_set".into(),
         other => other.to_string(),
     }
 }
@@ -1319,7 +1944,14 @@ fn receiver_static_type(expr: &Expr, fl: &FuncLower<'_>) -> Option<String> {
     if matches!(expr, Expr::Self_) {
         if let Some(ty) = &fl.self_ty {
             return match ty {
-                MirTy::Struct(n) | MirTy::Class(n) | MirTy::Named(n) => Some(n.clone()),
+                MirTy::Struct(n) | MirTy::Class(n) | MirTy::Named(n) => {
+                    Some(strip_existential_name(n))
+                }
+                MirTy::String => Some("String".into()),
+                MirTy::Int | MirTy::Int64 => Some("Int".into()),
+                MirTy::Double => Some("Double".into()),
+                MirTy::Bool => Some("Bool".into()),
+                MirTy::Array(_) => Some("Array".into()),
                 _ => None,
             };
         }
@@ -1329,7 +1961,12 @@ fn receiver_static_type(expr: &Expr, fl: &FuncLower<'_>) -> Option<String> {
         _ => Some(expr_mir_ty(expr)),
     };
     match ty {
-        Some(MirTy::Struct(n) | MirTy::Class(n) | MirTy::Named(n)) => Some(n),
+        Some(MirTy::Struct(n) | MirTy::Class(n) | MirTy::Named(n)) => Some(strip_existential_name(&n)),
+        Some(MirTy::String) => Some("String".into()),
+        Some(MirTy::Int | MirTy::Int64) => Some("Int".into()),
+        Some(MirTy::Double) => Some("Double".into()),
+        Some(MirTy::Bool) => Some("Bool".into()),
+        Some(MirTy::Array(_)) => Some("Array".into()),
         _ => {
             if let Expr::Construct { ty_name, .. } = expr {
                 Some(ty_name.clone())
@@ -1338,6 +1975,10 @@ fn receiver_static_type(expr: &Expr, fl: &FuncLower<'_>) -> Option<String> {
             }
         }
     }
+}
+
+fn strip_existential_name(n: &str) -> String {
+    n.strip_prefix("existential:").unwrap_or(n).to_string()
 }
 
 fn is_property_access(base_ty: &MirTy, name: &str) -> bool {
@@ -1359,26 +2000,34 @@ fn expr_mir_ty(expr: &Expr) -> MirTy {
         Expr::Char(_) => MirTy::Char,
         Expr::Nil => MirTy::Optional(Box::new(MirTy::Void)),
         Expr::StringLit(_) | Expr::StringInterp(_) => MirTy::String,
-        Expr::Local(_) | Expr::Param(_) | Expr::Self_ => MirTy::Int,
+        Expr::Local(_) | Expr::Param(_) | Expr::Self_ | Expr::Super => MirTy::Int,
         Expr::Unary { ty, .. } | Expr::Binary { ty, .. } | Expr::IfExpr { ty, .. } | Expr::Member { ty, .. }
         | Expr::Call { ty, .. } | Expr::Construct { ty, .. } | Expr::EnumCase { ty, .. }
         | Expr::Switch { ty, .. } | Expr::Catch { ty, .. } => MirTy::from_hir(ty),
-        Expr::OptionalNone(t) => MirTy::Optional(Box::new(MirTy::from_hir(t))),
+        Expr::OptionalNone(inner) => MirTy::Optional(Box::new(MirTy::from_hir(inner))),
         Expr::OptionalSome(e) => MirTy::Optional(Box::new(expr_mir_ty(e))),
         Expr::TryOptional(e) => MirTy::Optional(Box::new(expr_mir_ty(e))),
         Expr::Cast { to, .. } => MirTy::from_hir(to),
+        Expr::ArrayLit { elem_ty, .. } => MirTy::Array(Box::new(MirTy::from_hir(elem_ty))),
+        Expr::DictLit { .. } => MirTy::Named("Dictionary".into()),
+        Expr::Index { ty, .. } => MirTy::from_hir(ty),
+        Expr::FuncRef { ty, .. } => MirTy::from_hir(ty),
     }
 }
 
-fn pattern_key(pattern: &Pattern, sub_ty: &MirTy) -> Option<SwitchKey> {
+fn pattern_key(pattern: &Pattern, sub_ty: &MirTy, fl: &FuncLower<'_>) -> Option<SwitchKey> {
     match pattern {
         Pattern::LitInt(n) => Some(SwitchKey::Int(*n)),
         Pattern::LitBool(b) => Some(SwitchKey::Bool(*b)),
         Pattern::EnumCase { case, .. } => {
             if let MirTy::Enum(name) = sub_ty {
-                // tag index resolved at codegen; use hash placeholder 0
-                let _ = (name, case);
-                Some(SwitchKey::Tag(0))
+                let tag = fl
+                    .lower
+                    .enum_cases
+                    .get(name)
+                    .and_then(|cases| cases.iter().position(|(n, _)| n == case))
+                    .unwrap_or(0) as i32;
+                Some(SwitchKey::Tag(tag))
             } else if matches!(sub_ty, MirTy::Optional(_)) {
                 match case.as_str() {
                     "some" => Some(SwitchKey::Tag(1)),
@@ -1427,16 +2076,30 @@ fn bind_pattern(fl: &mut FuncLower<'_>, pattern: &Pattern, sub_ty: &MirTy, subje
                 }
                 return;
             }
+            let (case_index, field_tys) = if let MirTy::Enum(ename) = sub_ty {
+                let cases = fl.lower.enum_cases.get(ename);
+                let idx = cases
+                    .and_then(|cs| cs.iter().position(|(n, _)| n == case))
+                    .unwrap_or(0);
+                let ftys = cases
+                    .and_then(|cs| cs.get(idx))
+                    .map(|(_, fields)| fields.iter().map(|(_, t)| t.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                (idx, ftys)
+            } else {
+                (0, vec![])
+            };
             for (i, bname) in bindings.iter().enumerate() {
-                let loc = fl.alloc_local(MirTy::Int);
+                let fty = field_tys.get(i).cloned().unwrap_or(MirTy::Int);
+                let loc = fl.alloc_local(fty.clone());
                 fl.emit(Inst::EnumPayload {
                     dst: loc,
                     base: subject.clone(),
-                    case_index: 0,
+                    case_index,
                     field_index: i,
-                    ty: MirTy::Int,
+                    ty: fty.clone(),
                 });
-                fl.bind_local(bname, loc, MirTy::Int);
+                fl.bind_local(bname, loc, fty);
             }
         }
         _ => {}

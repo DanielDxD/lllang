@@ -9,7 +9,7 @@ Default public registry URL (planned): `https://registry.lang.dev/` — override
 - **Simple caching** — immutable blobs keyed by hash
 - **CDN-friendly** — GET-heavy, no session for downloads
 - **Reproducible installs** — lockfile stores hashes, not just versions
-- **Multi-target** — index lists available `.bll` per triple
+- **Portable `.bll`** — one BLL v2 bitcode blob per package version (finalized per `--target` at link)
 
 ## Index API
 
@@ -61,30 +61,21 @@ Example:
     "size": 4096,
     "url": "/v1/blobs/blake3/abc123..."
   },
-  "targets": [
-    {
-      "triple": "aarch64-apple-darwin",
-      "bll": {
-        "hash": "blake3:def456...",
-        "size": 120000,
-        "url": "/v1/blobs/blake3/def456..."
-      }
-    },
-    {
-      "triple": "x86_64-unknown-linux-gnu",
-      "bll": {
-        "hash": "blake3:789abc...",
-        "size": 118000,
-        "url": "/v1/blobs/blake3/789abc..."
-      }
-    }
-  ],
+  "bll": {
+    "hash": "blake3:def456...",
+    "size": 120000,
+    "url": "/v1/blobs/blake3/def456...",
+    "format": "portable-bitcode",
+    "version": 2
+  },
   "dependencies": {
     "std.io": "^0.3"
   },
   "yanked": false
 }
 ```
+
+One portable `.bll` per package version (BLL v2). Legacy per-triple `targets[]` entries are obsolete and ignored by current clients.
 
 `sbl.url` and `bll.url` may be absolute CDN URLs.
 

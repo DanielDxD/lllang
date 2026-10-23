@@ -66,22 +66,22 @@ lang run --manifest examples/hello/Package.ll
 
 `lang run` respects build settings from `Package.ll` (`settings:`, product name, `--release`).
 
-## Watch mode (planned)
+## Watch mode
 
 During development:
 
 ```bash
-lang watch run
+lang watch
 ```
 
-Rebuilds incrementally when `.ll` files change and re-runs the executable. Watch integrates with the same build graph as `lang build`.
+Rebuilds incrementally when `.ll` files change (MVP). See [CLI reference](../toolchain/cli-reference.md).
 
-## Add a dependency (planned)
+## Add a dependency
 
 Libraries publish as `.sbl` + `.bll` pairs — consumers never recompile dependency source:
 
 ```bash
-lang add std.io@^0.1
+lang add acme.math@0.1.0
 lang restore
 ```
 

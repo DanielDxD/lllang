@@ -6,21 +6,24 @@ Declarations introduce names into scopes: variables, functions, types, and names
 
 ## Access control
 
+See [ADR 009](../design/adr/009-access-control.md). Swift-like set:
+
 | Modifier | Meaning |
 |----------|---------|
 | `internal` | Visible within the same package (default) |
 | `public` | Visible to importers of the package |
-| `protected` | Visible in the declaring type and subclasses |
-| `private` | Visible only in the enclosing declaration / file member scope |
+| `open` | Like `public`, and overridable/subclassable across packages |
+| `fileprivate` | Visible only within the same source file |
+| `private` | Visible only in the enclosing declaration |
 
-There is **no** `fileprivate` or `open`. Subclassing across packages requires `public` types and `public` overridable members.
+There is **no** `protected` (use `fileprivate` or `public` instead).
 
 Property visibility can split getter and setter:
 
 ```ll
 public class Account {
     public private(set) var balance: Decimal = 0
-    protected var ledger: [Entry] = []
+    fileprivate var ledger: [Entry] = []
     private var pinHash: Data
 }
 ```
@@ -213,9 +216,11 @@ Forward references are allowed for functions and mutually recursive types when t
 | Immutability | `let` |
 | Positional params | Default; names optional at call |
 | Construction | `Type(args)` |
-| Visibility | `public`, `internal`, `protected`, `private` |
-| Computed property | `=>` or `get`/`set` |
+| Visibility | `open`, `public`, `internal`, `fileprivate`, `private` (no `protected`; ADR 009) |
+| Computed property | `=>` or `get`/`set` (+ `willSet`/`didSet`) |
 | Async | `async func` |
 | Errors | `throws(SpecificError)` |
+
+Custom `subscript` and `operator` declarations are **not** supported yet (LL3001 → Later).
 
 Next: [Expressions](04-expressions.md) for operators, calls, and literals in expression positions.

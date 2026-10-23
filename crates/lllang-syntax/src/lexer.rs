@@ -92,10 +92,7 @@ impl<'a> Lexer<'a> {
             b'-' => self.lex_minus(),
             b'*' => self.lex_star(),
             b'/' => self.lex_slash(),
-            b'%' => {
-                self.advance(1);
-                TokenKind::Percent
-            }
+            b'%' => self.lex_percent(),
             b'=' => self.lex_eq(),
             b'!' => self.lex_bang(),
             b'<' => self.lex_lt(),
@@ -111,6 +108,11 @@ impl<'a> Lexer<'a> {
                 TokenKind::Tilde
             }
             b'?' => self.lex_question(),
+            b'#' => {
+                self.advance(1);
+                TokenKind::Hash
+            }
+            b'$' => self.lex_dollar_ident(),
             b'\'' => self.lex_char(),
             b'"' => self.lex_string(),
             b'0'..=b'9' => self.lex_number(),
@@ -144,7 +146,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_plus(&mut self) -> TokenKind {
-        if self.peek_byte() == Some(b'=') {
+        if self.starts_with("+=") {
             self.advance(2);
             TokenKind::PlusEq
         } else {
@@ -157,7 +159,7 @@ impl<'a> Lexer<'a> {
         if self.starts_with("->") {
             self.advance(2);
             TokenKind::Arrow
-        } else if self.peek_byte() == Some(b'=') {
+        } else if self.starts_with("-=") {
             self.advance(2);
             TokenKind::MinusEq
         } else {
@@ -167,7 +169,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_star(&mut self) -> TokenKind {
-        if self.peek_byte() == Some(b'=') {
+        if self.starts_with("*=") {
             self.advance(2);
             TokenKind::StarEq
         } else {
@@ -177,12 +179,23 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_slash(&mut self) -> TokenKind {
-        if self.peek_byte() == Some(b'=') {
+        // Line/block comments are handled in `skip_trivia` before this runs.
+        if self.starts_with("/=") {
             self.advance(2);
             TokenKind::SlashEq
         } else {
             self.advance(1);
             TokenKind::Slash
+        }
+    }
+
+    fn lex_percent(&mut self) -> TokenKind {
+        if self.starts_with("%=") {
+            self.advance(2);
+            TokenKind::PercentEq
+        } else {
+            self.advance(1);
+            TokenKind::Percent
         }
     }
 
@@ -453,6 +466,38 @@ impl<'a> Lexer<'a> {
         TokenKind::Integer(self.slice(start))
     }
 
+    fn lex_dollar_ident(&mut self) -> TokenKind {
+        let start = self.pos;
+        self.advance(1); // `$`
+        let Some(b) = self.peek_byte() else {
+            self.error(
+                codes::UNEXPECTED_TOKEN,
+                "expected identifier after `$`",
+                Span::new(start as u32, self.pos as u32),
+            );
+            return TokenKind::Error;
+        };
+        if !(b.is_ascii_alphabetic() || b == b'_' || is_ident_start(b)) {
+            self.error(
+                codes::UNEXPECTED_TOKEN,
+                "expected identifier after `$`",
+                Span::new(start as u32, self.pos as u32),
+            );
+            return TokenKind::Error;
+        }
+        let name_start = self.pos;
+        self.advance(1);
+        while let Some(b) = self.peek_byte() {
+            if b.is_ascii_alphanumeric() || b == b'_' || is_ident_continue(b) {
+                self.advance(1);
+            } else {
+                break;
+            }
+        }
+        let name = self.source[name_start..self.pos].to_string();
+        TokenKind::DollarIdent(name)
+    }
+
     fn lex_ident_or_keyword(&mut self) -> TokenKind {
         let start = self.pos;
         while self.pos < self.bytes.len() {
@@ -544,6 +589,7 @@ fn keyword_kind(text: &str) -> Option<TokenKind> {
         "import" => TokenKind::Import,
         "struct" => TokenKind::Struct,
         "class" => TokenKind::Class,
+        "actor" => TokenKind::Actor,
         "enum" => TokenKind::Enum,
         "protocol" => TokenKind::Protocol,
         "extension" => TokenKind::Extension,
@@ -559,6 +605,7 @@ fn keyword_kind(text: &str) -> Option<TokenKind> {
         "async" => TokenKind::Async,
         "await" => TokenKind::Await,
         "unsafe" => TokenKind::Unsafe,
+        "open" => TokenKind::Open,
         "public" => TokenKind::Public,
         "internal" => TokenKind::Internal,
         "private" => TokenKind::Private,
@@ -660,5 +707,11 @@ public func main() {
         let k = kinds("&& || ! ?? ?. => ->");
         assert!(k.contains(&TokenKind::AndAnd));
         assert!(k.contains(&TokenKind::FatArrow));
+    }
+
+    #[test]
+    fn lexes_plus_eq() {
+        let k = kinds("n += 2");
+        assert!(k.contains(&TokenKind::PlusEq), "{k:?}");
     }
 }

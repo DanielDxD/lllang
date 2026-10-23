@@ -63,12 +63,12 @@ public struct ToolSchema: Codable {
 }
 
 public enum Tools {
-    public static func schema(for function: (some Any).Type) -> ToolSchema
+    // MVP: schemas come from `@tool` attributes / `.mll`; reflective `(some Any).Type` is Later
     public static func register(_ schemas: [ToolSchema], handler: ToolDispatcher)
 }
 ```
 
-Runtime dispatches model-emitted tool calls back to registered LLLang functions with typed decoding of arguments.
+Runtime dispatches model-emitted tool calls back to registered LLLang functions with typed decoding of arguments. Prefer `@tool` on concrete functions (see `examples/llm-agent`).
 
 ## Structured output
 

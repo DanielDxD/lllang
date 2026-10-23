@@ -1,3 +1,3 @@
-# Skills for {{name}}
+# Skills
 
-Add agent skill markdown here.
+Add agent skill files here for `{{name}}`.

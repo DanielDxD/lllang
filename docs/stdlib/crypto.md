@@ -1,70 +1,23 @@
 # Std.Crypto
 
-**Std.Crypto** provides hashing, message authentication, AEAD encryption, and cryptographically secure random bytes.
+**Std.Crypto** hashing, HMAC, and secure random helpers (builtins + C runtime).
 
 ```ll
 import Std.Crypto
 ```
 
-## Secure random
+## Shipped MVP
 
 ```ll
-public enum SecureRandom {
-    public static func bytes(count: Int) throws(CryptoError) -> Data
-    public static func uuidV4() -> UUID
-}
+Crypto.sha256(text: String) -> String          // lowercase hex
+HMAC.sha256(key: String, data: String) -> String
+Hash.sha256(text: String) -> String            // alias
+Base64.encode / Hex helpers                    // where registered in prelude
+SecureRandom                                   // via runtime where wired
 ```
 
-## Hashing
+See `examples/hmac-smoke` and `examples/stdlib-surface`.
 
-```ll
-public enum SHA256 {
-    public static func hash(_ data: Span<UInt8>) -> Data
-    public static func hashString(_ text: String) -> Data
-}
+## Design targets (not all shipped)
 
-public enum BLAKE3 {
-    public static func hash(_ data: Span<UInt8>) -> Data
-}
-```
-
-## HMAC
-
-```ll
-public struct HMAC<Key: HashAlgorithm> {
-    public init(key: Data)
-    public mutating func update(_ data: Span<UInt8>)
-    public func finalize() -> Data
-}
-```
-
-## AEAD
-
-```ll
-public struct ChaCha20Poly1305 {
-    public init(key: Data) throws(CryptoError)
-    public func seal(_ plaintext: Data, nonce: Data, additionalData: Data = Data()) throws(CryptoError) -> Data
-    public func open(_ combined: Data, nonce: Data, additionalData: Data = Data()) throws(CryptoError) -> Data
-}
-```
-
-## Constant-time comparison
-
-```ll
-public func constantTimeEqual(_ a: Data, _ b: Data) -> Bool
-```
-
-Use for MAC/tag verification — never compare secrets with `==` on strings.
-
-## Key derivation
-
-```ll
-public enum PBKDF2 {
-    public static func derive(password: Data, salt: Data, iterations: Int, length: Int) throws(CryptoError) -> Data
-}
-```
-
-## See also
-
-- [IO](io.md) — `Data` buffers
-- [Net](net.md) — TLS certificate stores
+Generic `HMAC<Key: HashAlgorithm>`, BLAKE3, and ChaCha20-Poly1305 AEAD remain design sketches — prefer the free functions above until those types lower.

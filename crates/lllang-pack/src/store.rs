@@ -30,6 +30,8 @@ pub fn host_triple() -> String {
         ("x86_64", "macos") => "x86_64-apple-darwin".into(),
         ("x86_64", "linux") => "x86_64-unknown-linux-gnu".into(),
         ("aarch64", "linux") => "aarch64-unknown-linux-gnu".into(),
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc".into(),
+        ("aarch64", "windows") => "aarch64-pc-windows-msvc".into(),
         (a, o) => format!("{a}-unknown-{o}"),
     }
 }
@@ -72,20 +74,21 @@ impl Store {
         let bll_hash = crate::content_hash(bll);
         self.put_blob(&sbl_hash, sbl)?;
         self.put_blob(&bll_hash, bll)?;
-        let entry = self
-            .root
-            .join("packages")
-            .join(name)
-            .join(version);
-        fs::create_dir_all(entry.join("targets"))?;
+        let entry = self.root.join("packages").join(name).join(version);
+        fs::create_dir_all(&entry)?;
         fs::write(entry.join("package.sbl"), sbl)?;
-        fs::write(
-            entry.join("targets").join(format!("{}.bll", host_triple())),
-            bll,
-        )?;
+        fs::write(entry.join("package.bll"), bll)?;
+        // Remove legacy per-triple layout if present.
+        let legacy_targets = entry.join("targets");
+        if legacy_targets.is_dir() {
+            let _ = fs::remove_dir_all(&legacy_targets);
+        }
         fs::write(
             entry.join("META"),
-            format!("sbl={sbl_hash}\nbll={bll_hash}\ntriple={}\n", host_triple()),
+            format!(
+                "sbl={sbl_hash}\nbll={bll_hash}\ntriple={}\nformat=bll-v2-portable\n",
+                crate::PORTABLE_TRIPLE
+            ),
         )?;
         Ok(entry)
     }
@@ -113,7 +116,19 @@ impl Store {
             .join("package.sbl")
     }
 
+    /// Path to portable `package.bll` (BLL v2). Falls back to legacy `targets/<host>.bll` only
+    /// so restore can emit a clear "rebuild" diagnostic when decoding fails.
     pub fn package_bll_path(&self, name: &str, version: &str) -> PathBuf {
+        let modern = self
+            .root
+            .join("packages")
+            .join(name)
+            .join(version)
+            .join("package.bll");
+        if modern.exists() {
+            return modern;
+        }
+        // Legacy path — caller must reject non-portable contents.
         self.root
             .join("packages")
             .join(name)

@@ -1,72 +1,36 @@
 # Std.Net
 
-**Std.Net** exposes TCP/UDP sockets, addresses, and TLS configuration hooks used by HTTP and custom protocols.
+**Std.Net** socket primitives. Import is optional for free builtins resolved via the prelude.
 
 ```ll
 import Std.Net
 ```
 
-## Addresses
+## Shipped MVP
 
 ```ll
-public struct IPAddress: Equatable, Hashable, Codable {
-    public static func parse(_ text: String) throws(NetError) -> IPAddress
-    public var isIPv4: Bool { get }
-    public var isIPv6: Bool { get }
-}
-
-public struct SocketAddress {
-    public init(ip: IPAddress, port: UInt16)
-    public var ip: IPAddress { get }
-    public var port: UInt16 { get }
-}
+TcpStream.connect(host: String, port: Int) -> TcpStream?
+stream.read() -> String
+stream.write(data: String)
+stream.close()
 ```
 
-## TCP
+Backed by `ll_tcp_*` in `runtime/lllang_rt.c` (Winsock on Windows).
 
-```ll
-public final class TcpListener {
-    public init(bind: SocketAddress) throws(NetError)
-    public func accept() async throws(NetError) -> TcpStream
-}
+## Also shipped — HTTP server
 
-public final class TcpStream: Reader, Writer {
-    public static func connect(to address: SocketAddress) async throws(NetError) -> TcpStream
-    public func setReadTimeout(_ timeout: Duration?)
-    public func close() throws(NetError)
-}
-```
+Prefer [`HttpServer.serve`](http.md) for path-routed HTTP (built on sockets in the runtime). TLS remains unshipped — reverse-proxy for HTTPS.
 
-## UDP
+## Not shipped yet
 
-```ll
-public final class UdpSocket {
-    public init(bind: SocketAddress?) throws(NetError)
-    public func send(to: SocketAddress, payload: Span<UInt8>) throws(NetError)
-    public func receive(into buffer: inout [UInt8]) throws(NetError) -> (count: Int, from: SocketAddress)
-}
-```
-
-## TLS
-
-```ll
-public struct TlsConfig {
-    public init(verifyHost: Bool = true, roots: CertificateStore = .system)
-    public static func client() -> TlsConfig
-}
-
-public extension TcpStream {
-    public func upgradeTls(config: TlsConfig, serverName: String) async throws(NetError) -> TlsStream
-}
-```
-
-## DNS
-
-```ll
-public func resolve(_ host: String, port: UInt16) async throws(NetError) -> [SocketAddress]
-```
+- `IPAddress` / `SocketAddress` rich types
+- `TcpListener.accept` as a separate API
+- `UdpSocket`
+- `TlsConfig` / `upgradeTls` / `TlsStream`
+- Async DNS `resolve`
 
 ## See also
 
-- [Http](http.md) — HTTP client on top of `TcpStream` / TLS
-- [Async](async.md) — async socket operations
+- [Http](http.md) — HTTP on top of TCP (server Phase 1.4)
+- [Async](async.md) — tasks / channels
+- [ROADMAP](../../ROADMAP.md) — Phase 1.4

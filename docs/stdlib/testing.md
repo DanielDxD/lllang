@@ -51,7 +51,7 @@ Statement-prefix macros desugar to runtime checks (failure messages include the 
 
 Free functions `expect(...)`, `expectEqual(...)`, etc. remain valid.
 
-`@throws(E) { ... }` is documented for a later pass.
+`@throws(E) { ... }` is **Later** (not claimed in the MVP runner).
 
 ## Theories
 

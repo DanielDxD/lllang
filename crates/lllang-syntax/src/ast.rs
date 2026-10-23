@@ -22,6 +22,12 @@ pub enum Decl {
     Var(VarDecl),
     Const(ConstDecl),
     Attribute(Attribute),
+    /// `#declare $NAME lit` — compile-time constant binding (expanded before sema).
+    CompileDeclare {
+        span: Span,
+        name: String,
+        value: Expr,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +39,7 @@ pub struct Attribute {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
+    Open,
     Public,
     Internal,
     Private,
@@ -130,6 +137,10 @@ pub struct ClassDecl {
     pub span: Span,
     pub attrs: Vec<Attribute>,
     pub access: Option<Access>,
+    pub is_abstract: bool,
+    pub is_sealed: bool,
+    /// Declared with `actor` (Phase 10 mailbox isolation MVP).
+    pub is_actor: bool,
     pub name: String,
     pub generics: Vec<GenericParam>,
     pub primary_ctor: Vec<PrimaryParam>,
@@ -218,6 +229,7 @@ pub struct FuncDecl {
     pub is_override: bool,
     pub is_virtual: bool,
     pub is_abstract: bool,
+    pub is_sealed: bool,
     pub name: String,
     pub generics: Vec<GenericParam>,
     pub params: Vec<Param>,
@@ -254,7 +266,27 @@ pub struct LetDecl {
     pub span: Span,
     pub attrs: Vec<Attribute>,
     pub access: Option<Access>,
+    /// `async let x = …` — structured concurrency binding (Phase 1.1b).
+    pub is_async: bool,
     pub bindings: Vec<PatternBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyObserver {
+    pub span: Span,
+    pub param_name: Option<String>,
+    pub body: Block,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComputedBody {
+    /// `var x: T => expr`
+    Arrow(Box<Expr>),
+    /// `var x: T { get { ... } set { ... } }`
+    Accessors {
+        getter: Block,
+        setter: Option<(Option<String>, Block)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,8 +294,14 @@ pub struct VarDecl {
     pub span: Span,
     pub attrs: Vec<Attribute>,
     pub access: Option<Access>,
+    /// Narrower setter visibility from `private(set)` / `fileprivate(set)` / `internal(set)`.
+    pub setter_access: Option<Access>,
     pub modifiers: ParamModifiers,
     pub bindings: Vec<PatternBinding>,
+    /// Computed property body (`=>` or get/set). Mutually exclusive with stored init+observers.
+    pub computed: Option<ComputedBody>,
+    pub will_set: Option<PropertyObserver>,
+    pub did_set: Option<PropertyObserver>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -388,6 +426,11 @@ pub enum Expr {
         span: Span,
         name: String,
     },
+    /// `$IDENT` compile-time constant (replaced with a literal before sema).
+    CompileConst {
+        span: Span,
+        name: String,
+    },
     SelfExpr {
         span: Span,
         kind: SelfKind,
@@ -461,6 +504,8 @@ pub enum Expr {
         span: Span,
         expr: Box<Expr>,
         optional: bool,
+        /// `try!` — trap on error.
+        force: bool,
     },
     Await {
         span: Span,
@@ -472,6 +517,13 @@ pub enum Expr {
         ty: Type,
         kind: CastKind,
     },
+    /// `expr is Type` or `expr is Type name` (optional binding).
+    Is {
+        span: Span,
+        expr: Box<Expr>,
+        ty: Type,
+        binding: Option<String>,
+    },
     Ternary {
         span: Span,
         condition: Box<Expr>,
@@ -482,6 +534,11 @@ pub enum Expr {
         span: Span,
         left: Box<Expr>,
         right: Box<Expr>,
+    },
+    /// Postfix force-unwrap `x!` (distinct from prefix `!` / `try!`).
+    ForceUnwrap {
+        span: Span,
+        expr: Box<Expr>,
     },
     Range {
         span: Span,
@@ -717,12 +774,36 @@ pub enum Stmt {
     },
     Defer {
         span: Span,
-        body: Block,
+        /// Expression form `#defer foo()` or block `#defer { ... }` / keyword `defer { ... }`.
+        body: DeferBody,
+    },
+    /// `#die "message"` — abort immediately.
+    Die {
+        span: Span,
+        message: String,
+    },
+    /// `#if $COND { ... } else { ... }` — dead branch dropped before sema.
+    CompileIf {
+        span: Span,
+        condition: Expr,
+        then_body: Block,
+        else_body: Option<Block>,
+    },
+    /// `@run call()` — fire-and-forget task spawn (Phase 10).
+    Run {
+        span: Span,
+        expr: Expr,
     },
     Block(Block),
     Error {
         span: Span,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeferBody {
+    Expr(Expr),
+    Block(Block),
 }
 
 #[derive(Debug, Clone, PartialEq)]

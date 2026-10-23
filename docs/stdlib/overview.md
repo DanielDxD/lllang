@@ -1,8 +1,8 @@
 # Standard library overview
 
-The LLLang standard library ships as prebuilt **`.bll`** artifacts referenced from your package manifest. Application code imports modules by name (`import Std.Json`); **`Std.Core`** is always in scope and does not require an import.
+Application code imports modules by name (`import Std.Json`); **`Std.Core`** is always in scope and does not require an import.
 
-**Status:** API surface is documented; Phase 3 ships MVPs for Json/Toon/Http/Async/Llm sufficient for `examples/json-toon`, `async-http`, and `llm-agent`. Fuller streaming/SIMD/server surfaces remain documented contracts for later polish.
+**Status (honest):** there are **no** published `Std.*` `.bll` modules yet. Imports resolve to **compiler builtins** + `runtime/lllang_rt.c`. **v0.2 freeze:** see [SHIPPED.md](SHIPPED.md). Opaque `some` / existential `any` / `associatedtype` sugars are not compile-ready. Native TLS is not shipped (reverse proxy).
 
 ## Design principles
 
@@ -27,19 +27,20 @@ The LLLang standard library ships as prebuilt **`.bll`** artifacts referenced fr
 | [FS](fs.md) | `Std.FS` | Paths, files, directories, watching |
 | [Process](process.md) | `Std.Process` | Subprocesses, signals, pipes |
 | [Env](env.md) | `Std.Env` | Environment variables, args |
-| [Net](net.md) | `Std.Net` | Sockets, addresses, TLS hooks |
-| [Http](http.md) | `Std.Http` | Client, server, middleware |
+| [Net](net.md) | `Std.Net` | `TcpStream` MVP; TLS/listener Phase 1.4 |
+| [Http](http.md) | `Std.Http` | Client free funcs MVP; server Phase 1.4 |
 | [Codable](codable.md) | `Std.Codable` | `Encoder`, `Decoder`, containers |
-| [Json](json.md) | `Std.Json` | SIMD parse, streaming, zero-copy views |
+| [Json](json.md) | `Std.Json` | Encode/decode MVP; streaming/SIMD Phase 1.3 |
 | [Toon](toon.md) | `Std.Toon` | TOON encode/decode, tabular arrays |
-| [Async](async.md) | `Std.Async` | `Task`, `TaskGroup`, `Channel` |
+| [Async](async.md) | `Std.Async` | `Task`, `Channel`; `TaskGroup` Phase 1.2 |
+| [SQL](sql.md) | `Std.SQL` | sqlite `SQLManager` / `SQLConnection` (async MVP) |
 | [Sync](sync.md) | `Std.Sync` | Mutex, RWLock, semaphores |
 | [Log](log.md) | `Std.Log` | Leveled logging, structured fields |
 | [Testing](testing.md) | `Std.Testing` | `@Test`, expectations, fixtures |
 | [Crypto](crypto.md) | `Std.Crypto` | Hashes, AEAD, secure random |
 | [CLI](cli.md) | `Std.CLI` | Argument parsing, help, completions |
 | [Llm](llm.md) | `Std.Llm` | Chat models, tools, structured output |
-| [Memory](memory.md) | `Std.Memory` | `Arena`, `Pool`, scratch buffers |
+| [Memory](memory.md) | `Std.Memory` | Arena Phase 1.3 (not shipped) |
 | [FFI](ffi.md) | `Std.FFI` | C ABI helpers atop language `unsafe` |
 | [PackageDescription](package-description.md) | `Std.PackageDescription` | Evaluate `Package.ll` manifests (toolchain only) |
 | [SolutionDescription](solution-description.md) | `Std.SolutionDescription` | Evaluate `Solution.ll` monorepo roots (toolchain only) |

@@ -6,9 +6,11 @@
 import Std.Collections
 ```
 
+**MVP (Phase 1.2):** `[T]` / `[Key: Value]` builtins with `count`, index, `append` / insert, and `[String].joined(sep)`. **`[Int]` HOFs** ship: `map` / `filter` / `reduce` / `sorted` / `any` / `all` (closures with scalar captures). **Set** algebra: `union` / `intersection` / `difference`. Opaque `some Sequence<…>` parameters remain Later.
+
 ## Array
 
-Type syntax `[T]` with literal `[1, 2, 3,]`.
+Type syntax `[T]` with literal `[1, 2, 3,]`. Empty literals need an explicit type annotation (`let xs: [Int] = []`).
 
 ```ll
 public struct Array<Element> {
@@ -19,24 +21,23 @@ public struct Array<Element> {
     public subscript(index: Int) -> Element { get set }
     public mutating func append(_ element: Element)
     public mutating func reserveCapacity(_ minimum: Int)
-    public func map<U>(_ transform: (Element) throws(E) -> U) throws(E) -> [U]
 }
 ```
 
 COW: assignment shares storage until a mutating write on a non-unique buffer triggers copy.
 
+String arrays ship `joined(separator:)` as an MVP helper.
+
 ## Dictionary
 
-Type syntax `[Key: Value]`.
+Type syntax `[Key: Value]` (MVP keys/values are typically `String`).
 
 ```ll
 public struct Dictionary<Key: Hashable, Value> {
     public init()
-    public init(uniqueKeysWithValues: [(Key, Value)]) throws(DictionaryError)
     public var count: Int { get }
     public subscript(key: Key) -> Value? { get set }
     public mutating func removeValue(forKey key: Key) -> Value?
-    public func mapValues<U>(_ transform: (Value) throws(E) -> U) throws(E) -> [Key: U]
 }
 ```
 
@@ -45,15 +46,13 @@ public struct Dictionary<Key: Hashable, Value> {
 ```ll
 public struct Set<Element: Hashable> {
     public init()
-    public init(_ elements: some Sequence<Element>)
     public var count: Int { get }
     public func contains(_ element: Element) -> Bool
-    public mutating func insert(_ element: Element) -> (inserted: Bool, memberAfterInsert: Element)
-    public mutating func formUnion(_ other: Set<Element>)
+    public mutating func insert(_ element: Element)
 }
 ```
 
-Set literals use `[a, b, c]` when element type is inferable from context.
+Set literals and algebra (`union` / `intersection` / …) are **Later**.
 
 ## COW buffer
 
@@ -64,7 +63,6 @@ public struct COWBuffer {
     public init(capacity: Int = 0)
     public var count: Int { get }
     public mutating func append(_ byte: UInt8)
-    public func withUnsafeBytes<R>(_ body: (Span<UInt8>) throws(E) -> R) throws(E) -> R
     public mutating func makeUnique(copyIfNeeded: Bool = true)
 }
 ```
@@ -73,18 +71,11 @@ public struct COWBuffer {
 
 ## Algorithms
 
-```ll
-public func sort<T: Comparable>(_ array: inout [T])
-public func binarySearch<T: Comparable>(_ array: [T], _ value: T) -> Int?
-public func grouped<T, K: Hashable>(
-    _ sequence: some Sequence<T>,
-    by key: (T) -> K
-) -> [K: [T]]
-```
+`sort` / `binarySearch` / `grouped` over generic sequences are **Later**. Prefer explicit loops for now.
 
 ## Equality and hashing
 
-Collections conform to `Equatable` and `Hashable` when their element types do.
+Collections conform to `Equatable` and `Hashable` when their element types do (MVP coverage varies by element kind).
 
 ## See also
 

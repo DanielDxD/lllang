@@ -289,6 +289,12 @@ impl Printer {
                 self.expr(&c.value);
             }
             Decl::Attribute(a) => self.attr(a),
+            Decl::CompileDeclare { name, value, .. } => {
+                self.raw("#declare $");
+                self.raw(name);
+                self.space();
+                self.expr(value);
+            }
         }
     }
 
@@ -335,7 +341,7 @@ impl Printer {
             self.access(a);
             self.space();
         }
-        self.raw("class ");
+        self.raw(if c.is_actor { "actor " } else { "class " });
         self.raw(&c.name);
         self.generics(&c.generics);
         if !c.primary_ctor.is_empty() {
@@ -537,6 +543,9 @@ impl Printer {
             self.access(a);
             self.space();
         }
+        if l.is_async {
+            self.raw("async ");
+        }
         self.raw("let ");
         self.bindings(&l.bindings);
     }
@@ -546,6 +555,10 @@ impl Printer {
         if let Some(a) = v.access {
             self.access(a);
             self.space();
+        }
+        if let Some(s) = v.setter_access {
+            self.access(s);
+            self.raw("(set) ");
         }
         self.raw("var ");
         self.bindings(&v.bindings);
@@ -592,6 +605,7 @@ impl Printer {
 
     fn access(&mut self, a: Access) {
         self.raw(match a {
+            Access::Open => "open",
             Access::Public => "public",
             Access::Internal => "internal",
             Access::Private => "private",
@@ -897,8 +911,34 @@ impl Printer {
                 }
             }
             Stmt::Defer { body, .. } => {
-                self.raw("defer ");
-                self.block(body);
+                self.raw("#defer ");
+                match body {
+                    DeferBody::Block(b) => self.block(b),
+                    DeferBody::Expr(e) => self.expr(e),
+                }
+            }
+            Stmt::Die { message, .. } => {
+                self.raw("#die ");
+                self.raw(&format!("\"{message}\""));
+            }
+            Stmt::CompileIf {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => {
+                self.raw("#if ");
+                self.expr(condition);
+                self.space();
+                self.block(then_body);
+                if let Some(e) = else_body {
+                    self.raw(" else ");
+                    self.block(e);
+                }
+            }
+            Stmt::Run { expr, .. } => {
+                self.raw("@run ");
+                self.expr(expr);
             }
             Stmt::Block(b) => self.block(b),
             Stmt::Error { .. } => self.raw("<error>"),
@@ -1032,6 +1072,10 @@ impl Printer {
             }
             Expr::LiteralString { parts, .. } => self.string_lit(parts),
             Expr::Ident { name, .. } => self.raw(name),
+            Expr::CompileConst { name, .. } => {
+                self.raw("$");
+                self.raw(name);
+            }
             Expr::SelfExpr { kind, .. } => self.raw(match kind {
                 SelfKind::Instance => "self",
                 SelfKind::Type => "Self",
@@ -1236,8 +1280,19 @@ impl Printer {
                 self.raw(") => ");
                 self.expr(body);
             }
-            Expr::Try { expr, optional, .. } => {
-                self.raw(if *optional { "try? " } else { "try " });
+            Expr::Try {
+                expr,
+                optional,
+                force,
+                ..
+            } => {
+                self.raw(if *optional {
+                    "try? "
+                } else if *force {
+                    "try! "
+                } else {
+                    "try "
+                });
                 self.expr(expr);
             }
             Expr::Await { expr, .. } => {
@@ -1252,6 +1307,20 @@ impl Printer {
                     CastKind::AsForced => " as! ",
                 });
                 self.ty(ty);
+            }
+            Expr::Is {
+                expr,
+                ty,
+                binding,
+                ..
+            } => {
+                self.expr(expr);
+                self.raw(" is ");
+                self.ty(ty);
+                if let Some(name) = binding {
+                    self.raw(" ");
+                    self.raw(name);
+                }
             }
             Expr::Ternary {
                 condition,
@@ -1269,6 +1338,10 @@ impl Printer {
                 self.expr(left);
                 self.raw(" ?? ");
                 self.expr(right);
+            }
+            Expr::ForceUnwrap { expr, .. } => {
+                self.expr(expr);
+                self.raw("!");
             }
             Expr::Range {
                 start,
@@ -1363,6 +1436,7 @@ fn decl_span(d: &Decl) -> Span {
         Decl::Var(v) => v.span,
         Decl::Const(c) => c.span,
         Decl::Attribute(a) => a.span,
+        Decl::CompileDeclare { span, .. } => *span,
     }
 }
 

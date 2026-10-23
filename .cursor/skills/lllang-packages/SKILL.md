@@ -8,20 +8,21 @@ description: Manage LLLang dependencies, Package.ll, Solution.ll, lockfiles, and
 ## Model
 
 - **No** `node_modules`-style source trees for published deps.
-- Libraries ship **`.sbl`** (type surface) + per-target **`.bll`** (binaries).
-- Compile against `.sbl`; link `.bll` for the active triple.
-- Global store layout: `~/.lang/store/<hash>/` with `package.sbl` and `targets/*.bll`.
+- Libraries ship **`.sbl`** (type surface) + **one portable `.bll`** (BLL v2 LLVM bitcode).
+- Compile against `.sbl`; **finalize** `.bll` → native object for `--target` at link.
+- Store: `~/.lang/store/packages/<name>/<ver>/{package.sbl,package.bll}`.
+- Official targets: `darwin/arm64`, `linux/amd64`, `linux/arm64`, `windows/amd64`, `windows/arm64`.
 
-## CLI (Phase 3 MVP)
+## CLI
 
 ```bash
-lang pack                         # emit .sbl/.bll into ~/.lang/store + Package.lock
+lang pack                         # emit portable package.sbl + package.bll
 lang publish [--registry DIR]     # pack + file registry (~/.lang/registry or LANG_REGISTRY)
 lang restore                      # store + fetch from file registry when needed
 lang add <id> / lang remove <id>  # pin path or registry-id local entries
 lang search <query> [--registry]  # registry index, else store
 lang sdk list|install|use <triple>
-lang build --target <triple>      # warn / fail if matching .bll missing
+lang build --target linux/amd64   # Go-like alias or full triple; LANG_OS + LANG_ARCH
 ```
 
 

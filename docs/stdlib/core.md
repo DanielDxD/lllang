@@ -2,6 +2,8 @@
 
 **Std.Core** is implicit: every compilation unit sees its types and protocols without an import. It defines language-adjacent primitives, universal protocols, and small utilities used across the stdlib.
 
+**MVP honesty:** Phase 1.1 ships concrete builtins (`Optional`, `Result`, `Equatable`, `Sendable`, …). Opaque `some` / existential `any` / `associatedtype` sugars are **Later** — do not treat sketches that use them as compile-ready APIs.
+
 ## Optionals and results
 
 ```ll
@@ -36,7 +38,9 @@ public protocol Hashable: Equatable {
 }
 
 public struct Hasher {
-    public mutating func combine(_ value: some Hashable)
+    // MVP: combine concrete Hashable values; `some Hashable` sugar is Later
+    public mutating func combine(_ value: Int)
+    public mutating func combine(_ value: String)
     public func finalize() -> UInt64
 }
 ```
@@ -51,12 +55,9 @@ public protocol Comparable: Equatable {
 
 ## Identifiable and CustomStringConvertible
 
-```ll
-public protocol Identifiable {
-    associatedtype ID: Hashable
-    var id: ID { get }
-}
+`Identifiable` with `associatedtype ID` is a **design target (Later)**. Today, prefer an explicit `id: String` / `id: Int` field (see `examples/identity`).
 
+```ll
 public protocol CustomStringConvertible {
     var description: String { get }
 }
@@ -75,18 +76,7 @@ See [Concurrency](../language/12-concurrency.md) for actor rules.
 
 ## Sequences
 
-```ll
-public protocol Sequence {
-    associatedtype Element
-    associatedtype Iterator: IteratorProtocol where Iterator.Element == Element
-    func makeIterator() -> Iterator
-}
-
-public protocol IteratorProtocol {
-    associatedtype Element
-    mutating func next() -> Element?
-}
-```
+`Sequence` / `IteratorProtocol` with `associatedtype` are **Later** protocol sketches. Phase 1.1 iteration is over concrete arrays, ranges, and dictionaries — not a generic `Sequence` protocol.
 
 ## Panic and preconditions
 
@@ -112,7 +102,8 @@ public func withUnsafePointer<T, R>(
 ```ll
 public struct TypeName {
     public let qualified: String
-    public static func of(_ type: (some Any).Type) -> TypeName
+    // MVP: pass a concrete metatype; `(some Any).Type` sugar is Later
+    public static func of(_ type: String.Type) -> TypeName
 }
 ```
 

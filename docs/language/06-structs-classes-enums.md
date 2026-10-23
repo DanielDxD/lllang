@@ -211,6 +211,6 @@ enum Job {
 - Construct with `Type(args)` — no `new`.
 - Enums: no `case` keyword; patterns bind without extra `let`.
 - Methods non-virtual unless marked `virtual`.
-- `protected` for subclass-visible members; no `open`/`fileprivate`.
+- Access: `open` / `public` / `internal` / `fileprivate` / `private` (no `protected`; see ADR 009).
 
 Continue with [Protocols & extensions](07-protocols-extensions.md).

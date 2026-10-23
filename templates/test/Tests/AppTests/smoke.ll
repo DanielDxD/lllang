@@ -10,4 +10,9 @@ public struct SmokeTests {
         @equal(answer(), 42)
         @expect(answer() == 42)
     }
+
+    @test("double")
+    public func testDouble() {
+        @equal(double(21), 42)
+    }
 }

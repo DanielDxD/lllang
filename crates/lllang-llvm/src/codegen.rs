@@ -8,7 +8,10 @@ use anyhow::{Context as AnyhowContext, Result};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::memory_buffer::MemoryBuffer;
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple,
+};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
     AggregateValueEnum, BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue,
@@ -25,42 +28,95 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub fn emit_object(program: &Program, object_path: &Path, opts: &CodegenOptions) -> Result<(String, ())> {
-    Target::initialize_native(&InitializationConfig::default()).ok();
+    init_targets();
     let context = Context::create();
-    let module = context.create_module("lllang");
-    let builder = context.create_builder();
-
-    declare_runtime_externs(&context, &module);
-    let layout = index_type_defs(program, &module, &context);
-
-    // Declare all functions first so vtables can take their addresses.
-    for func in &program.functions {
-        declare_function_sig(&context, &module, &layout, func)?;
-    }
-    emit_vtables(program, &context, &module, &layout)?;
-
-    for func in &program.functions {
-        emit_function(program, &context, &module, &builder, &layout, func)?;
-    }
-
+    let module = build_module(program, &context)?;
     let llvm_ir = module.print_to_string().to_string();
-    write_object(&module, object_path, opts)?;
+    write_object_for_triple(&module, object_path, &opts.target_triple, opts.optimize)?;
     Ok((llvm_ir, ()))
 }
 
-fn write_object(module: &Module, object_path: &Path, opts: &CodegenOptions) -> Result<()> {
-    let triple = TargetMachine::get_default_triple();
+/// Emit portable LLVM bitcode bytes for packing into BLL v2 (no host-native object).
+pub fn emit_bitcode(program: &Program, opts: &CodegenOptions) -> Result<(String, Vec<u8>)> {
+    init_targets();
+    let context = Context::create();
+    let module = build_module(program, &context)?;
+    let llvm_ir = module.print_to_string().to_string();
+    let buf = module.write_bitcode_to_memory();
+    let _ = opts; // optimize flag reserved for future bitcode passes
+    Ok((llvm_ir, buf.as_slice().to_vec()))
+}
+
+/// Lower raw LLVM bitcode to a native object for `triple`.
+pub fn materialize_bitcode_to_object(
+    bitcode: &[u8],
+    triple: &str,
+    object_path: &Path,
+    optimize: bool,
+) -> Result<()> {
+    init_targets();
+    let context = Context::create();
+    let mem = MemoryBuffer::create_from_memory_range_copy(bitcode, "bll.bc");
+    let module = Module::parse_bitcode_from_buffer(&mem, &context)
+        .map_err(|e| anyhow::anyhow!("parse bitcode: {e}"))?;
+    write_object_for_triple(&module, object_path, triple, optimize)?;
+    Ok(())
+}
+
+fn init_targets() {
+    Target::initialize_all(&InitializationConfig::default());
+}
+
+fn build_module<'ctx>(program: &Program, context: &'ctx Context) -> Result<Module<'ctx>> {
+    let module = context.create_module("lllang");
+    let builder = context.create_builder();
+
+    declare_runtime_externs(context, &module);
+    let layout = index_type_defs(program, &module, context);
+
+    for func in &program.functions {
+        declare_function_sig(context, &module, &layout, func)?;
+    }
+    emit_vtables(program, context, &module, &layout)?;
+
+    for func in &program.functions {
+        emit_function(program, context, &module, &builder, &layout, func)?;
+    }
+    Ok(module)
+}
+
+fn write_object_for_triple(
+    module: &Module,
+    object_path: &Path,
+    triple_str: &str,
+    optimize: bool,
+) -> Result<()> {
+    let triple = TargetTriple::create(triple_str);
     let target = Target::from_triple(&triple).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let opt = if opts.optimize {
+    let opt = if optimize {
         OptimizationLevel::Default
     } else {
         OptimizationLevel::None
     };
     let tm = target
-        .create_target_machine(&triple, "generic", "", opt, RelocMode::Default, CodeModel::Default)
-        .with_context(|| "target machine")?;
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            opt,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .with_context(|| format!("target machine for `{triple_str}`"))?;
+    module.set_triple(&triple);
+    let td = tm.get_target_data();
+    let dl = td.get_data_layout();
+    module.set_data_layout(&dl);
+    if let Some(parent) = object_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
     tm.write_to_file(module, FileType::Object, object_path)
-        .with_context(|| "write object")?;
+        .with_context(|| format!("write object for `{triple_str}`"))?;
     Ok(())
 }
 
@@ -91,6 +147,13 @@ fn declare_runtime_externs<'ctx>(context: &'ctx Context, module: &Module<'ctx>) 
     decl_void("ll_array_append", &[ptr.into(), ptr.into()]);
     decl("ll_array_count", i64.into(), &[ptr.into()]);
     decl("ll_array_get_ptr", ptr.into(), &[ptr.into(), i64.into()]);
+    decl("ll_array_new_i64", ptr.into(), &[]);
+    // First arg is `void **` (address of the array handle slot).
+    decl_void("ll_array_append_i64", &[ptr.into(), i64.into()]);
+    decl("ll_array_get_i64", i64.into(), &[ptr.into(), i64.into()]);
+    decl_void("ll_array_set_i64", &[ptr.into(), i64.into(), i64.into()]);
+    decl("ll_array_sorted_i64", ptr.into(), &[ptr.into()]);
+    decl_void("ll_array_append", &[ptr.into(), ptr.into()]);
     decl("ll_string_from_cstr", ptr.into(), &[ptr.into()]);
     decl("ll_string_from_bytes", ptr.into(), &[ptr.into(), i64.into()]);
     decl("ll_string_len", i64.into(), &[ptr.into()]);
@@ -102,7 +165,93 @@ fn declare_runtime_externs<'ctx>(context: &'ctx Context, module: &Module<'ctx>) 
     decl("ll_string_from_bool", ptr.into(), &[i32.into()]);
     decl("ll_string_eq", i32.into(), &[ptr.into(), ptr.into()]);
     decl_void("ll_print", &[ptr.into()]);
+    decl("ll_isa", i32.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_type_name", ptr.into(), &[ptr.into()]);
     decl_void("ll_trap", &[ptr.into(), ptr.into()]);
+    decl_void("ll_die", &[ptr.into()]);
+    decl_void("ll_eprint", &[ptr.into()]);
+    decl("ll_read_line", ptr.into(), &[]);
+    decl_void("ll_fatal_error", &[ptr.into()]);
+    decl_void("ll_assert", &[i32.into(), ptr.into()]);
+    decl_void("ll_rt_set_args", &[i32.into(), ptr.into()]);
+    decl("ll_args_get", ptr.into(), &[i64.into()]);
+    decl("ll_args_count", i64.into(), &[]);
+    decl("ll_env_get", ptr.into(), &[ptr.into()]);
+    decl_void("ll_env_load_dotenv", &[ptr.into()]);
+    decl("ll_env_get_string_or", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_env_get_i64", i64.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_env_get_i64_or", i64.into(), &[ptr.into(), i64.into()]);
+    decl("ll_env_get_bool", i32.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_env_get_bool_or", i32.into(), &[ptr.into(), i32.into()]);
+    decl(
+        "ll_env_get_f64",
+        context.f64_type().into(),
+        &[ptr.into(), ptr.into()],
+    );
+    decl(
+        "ll_env_get_f64_or",
+        context.f64_type().into(),
+        &[ptr.into(), context.f64_type().into()],
+    );
+    decl("ll_env_get_decimal", i64.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_env_get_decimal_or", i64.into(), &[ptr.into(), i64.into()]);
+    decl("ll_file_exists", i32.into(), &[ptr.into()]);
+    decl("ll_file_read_text", ptr.into(), &[ptr.into()]);
+    decl("ll_file_write_text", i32.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_instant_now_ms", i64.into(), &[]);
+    decl_void("ll_sleep_ms", &[i64.into()]);
+    decl_void("ll_process_exit", &[i64.into()]);
+    decl("ll_process_start", ptr.into(), &[ptr.into()]);
+    decl("ll_process_wait", i64.into(), &[ptr.into()]);
+    decl("ll_string_contains", i32.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_string_trim", ptr.into(), &[ptr.into()]);
+    decl("ll_string_substring", ptr.into(), &[ptr.into(), i64.into(), i64.into()]);
+    decl("ll_string_split", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_string_upper", ptr.into(), &[ptr.into()]);
+    decl("ll_string_lower", ptr.into(), &[ptr.into()]);
+    decl("ll_string_replace", ptr.into(), &[ptr.into(), ptr.into(), ptr.into()]);
+    decl("ll_string_join", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_identity_uuid", ptr.into(), &[]);
+    decl("ll_identity_parse", ptr.into(), &[ptr.into()]);
+    decl("ll_identity_short_id", ptr.into(), &[]);
+    decl("ll_identity_ulid", ptr.into(), &[]);
+    decl("ll_identity_nanoid", ptr.into(), &[]);
+    decl("ll_math_abs_i64", i64.into(), &[i64.into()]);
+    decl("ll_math_max_i64", i64.into(), &[i64.into(), i64.into()]);
+    decl("ll_math_min_i64", i64.into(), &[i64.into(), i64.into()]);
+    decl("ll_math_clamp_i64", i64.into(), &[i64.into(), i64.into(), i64.into()]);
+    decl("ll_math_sqrt", context.f64_type().into(), &[context.f64_type().into()]);
+    decl(
+        "ll_math_pow",
+        context.f64_type().into(),
+        &[context.f64_type().into(), context.f64_type().into()],
+    );
+    decl("ll_math_sin", context.f64_type().into(), &[context.f64_type().into()]);
+    decl("ll_math_log10", context.f64_type().into(), &[context.f64_type().into()]);
+    decl("ll_math_pi", context.f64_type().into(), &[]);
+    decl("ll_decimal_from_string", i64.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_decimal_add", i64.into(), &[i64.into(), i64.into()]);
+    decl("ll_decimal_sub", i64.into(), &[i64.into(), i64.into()]);
+    decl("ll_decimal_mul", i64.into(), &[i64.into(), i64.into()]);
+    decl("ll_base64_encode", ptr.into(), &[ptr.into()]);
+    decl("ll_hex_encode", ptr.into(), &[ptr.into()]);
+    decl("ll_secure_random_bytes", ptr.into(), &[i64.into()]);
+    decl("ll_array_new_ptr", ptr.into(), &[]);
+    decl_void("ll_array_append_ptr", &[ptr.into(), ptr.into()]);
+    decl("ll_array_get_ref", ptr.into(), &[ptr.into(), i64.into()]);
+    decl("ll_dict_new", ptr.into(), &[]);
+    decl_void("ll_dict_set", &[ptr.into(), ptr.into(), ptr.into()]);
+    decl("ll_dict_get", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_dict_contains", i32.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_dict_count", i64.into(), &[ptr.into()]);
+    decl("ll_dict_keys", ptr.into(), &[ptr.into()]);
+    decl("ll_set_new", ptr.into(), &[]);
+    decl_void("ll_set_insert", &[ptr.into(), ptr.into()]);
+    decl("ll_set_contains", i32.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_set_count", i64.into(), &[ptr.into()]);
+    decl("ll_set_union", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_set_intersection", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_set_difference", ptr.into(), &[ptr.into(), ptr.into()]);
     decl("ll_int_from_string", i64.into(), &[ptr.into(), ptr.into()]);
     decl("ll_double_sqrt", context.f64_type().into(), &[context.f64_type().into()]);
     decl("ll_json_decode_fields", i32.into(), &[ptr.into(), ptr.into(), ptr.into()]);
@@ -110,6 +259,60 @@ fn declare_runtime_externs<'ctx>(context: &'ctx Context, module: &Module<'ctx>) 
     decl("ll_toon_decode_fields", i32.into(), &[ptr.into(), ptr.into(), ptr.into()]);
     decl("ll_toon_encode_fields", ptr.into(), &[ptr.into(), ptr.into()]);
     decl("ll_http_get", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_http_post", ptr.into(), &[ptr.into(), ptr.into(), ptr.into()]);
+    decl_void("ll_log_debug", &[ptr.into()]);
+    decl_void("ll_log_debug_fields", &[ptr.into(), ptr.into()]);
+    decl("ll_arena_create", ptr.into(), &[i64.into()]);
+    decl_void("ll_run_blocking_noop", &[]);
+    decl("ll_with_timeout_ms", i64.into(), &[i64.into()]);
+    decl_void("ll_http_server_listen", &[i64.into(), ptr.into()]);
+    decl_void("ll_http_server_serve", &[i64.into(), ptr.into()]);
+    decl_void("ll_log_info", &[ptr.into()]);
+    decl_void("ll_log_warn", &[ptr.into()]);
+    decl_void("ll_log_error", &[ptr.into()]);
+    decl_void("ll_cli_usage", &[ptr.into()]);
+    decl("ll_cli_has_flag", i32.into(), &[ptr.into()]);
+    decl("ll_tcp_connect", ptr.into(), &[ptr.into(), i64.into()]);
+    decl("ll_tcp_read", ptr.into(), &[ptr.into()]);
+    decl_void("ll_tcp_write", &[ptr.into(), ptr.into()]);
+    decl_void("ll_tcp_close", &[ptr.into()]);
+    decl("ll_mutex_create", ptr.into(), &[]);
+    decl_void("ll_mutex_lock", &[ptr.into()]);
+    decl_void("ll_mutex_unlock", &[ptr.into()]);
+    // Phase 10 concurrency / SQL
+    decl("ll_task_spawn", ptr.into(), &[ptr.into()]);
+    decl("ll_task_spawn_ret", ptr.into(), &[ptr.into()]);
+    decl_void("ll_task_join", &[ptr.into()]);
+    decl("ll_task_join_ret", ptr.into(), &[ptr.into()]);
+    decl_void("ll_task_detach", &[ptr.into()]);
+    decl_void("ll_task_cancel", &[ptr.into()]);
+    decl("ll_channel_create", ptr.into(), &[i64.into()]);
+    decl_void("ll_channel_send_i64", &[ptr.into(), i64.into()]);
+    decl("ll_channel_recv_i64", i64.into(), &[ptr.into()]);
+    decl_void("ll_channel_close", &[ptr.into()]);
+    decl("ll_wait_group_create", ptr.into(), &[]);
+    decl_void("ll_wait_group_add", &[ptr.into(), i64.into()]);
+    decl_void("ll_wait_group_done", &[ptr.into()]);
+    decl_void("ll_wait_group_wait", &[ptr.into()]);
+    decl("ll_task_group_create", ptr.into(), &[]);
+    decl_void("ll_task_group_add", &[ptr.into(), ptr.into()]);
+    decl_void("ll_task_group_wait", &[ptr.into()]);
+    decl("ll_regex_is_match", i32.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_cancellation_token_create", ptr.into(), &[]);
+    decl_void("ll_cancellation_token_cancel", &[ptr.into()]);
+    decl_void("ll_cancellation_token_throw_if_cancelled", &[ptr.into()]);
+    decl_void("ll_main_actor_drain", &[]);
+    decl_void("ll_main_actor_submit", &[ptr.into()]);
+    decl("ll_sql_open", ptr.into(), &[ptr.into()]);
+    decl("ll_sql_exec", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl_void("ll_sql_close", &[ptr.into()]);
+    decl_void("ll_weak_store", &[ptr.into(), ptr.into()]);
+    decl("ll_weak_load", ptr.into(), &[ptr.into()]);
+    decl_void("ll_unowned_store", &[ptr.into(), ptr.into()]);
+    decl("ll_unowned_load", ptr.into(), &[ptr.into()]);
+    decl("ll_crypto_sha256", ptr.into(), &[ptr.into()]);
+    decl("ll_crypto_hmac_sha256", ptr.into(), &[ptr.into(), ptr.into()]);
+    decl("ll_c_strlen", i64.into(), &[ptr.into()]);
     decl(
         "ll_llm_run_agent",
         ptr.into(),
@@ -136,6 +339,9 @@ struct TypeLayout<'ctx> {
     class_with_vtable: HashMap<String, Vec<String>>,
     /// Codec schema strings: `sku:s,name:s,priceCents:i`
     field_schemas: HashMap<String, String>,
+    /// Class name → weak field indices (into logical fields, not including vtable).
+    weak_fields: HashMap<String, Vec<usize>>,
+    unowned_fields: HashMap<String, Vec<usize>>,
 }
 
 fn index_type_defs<'ctx>(program: &Program, module: &Module<'ctx>, context: &'ctx Context) -> TypeLayout<'ctx> {
@@ -149,59 +355,143 @@ fn index_type_defs<'ctx>(program: &Program, module: &Module<'ctx>, context: &'ct
     let mut struct_types = HashMap::new();
     let mut class_with_vtable = HashMap::new();
     let mut field_schemas = HashMap::new();
+    let mut weak_fields = HashMap::new();
+    let mut unowned_fields = HashMap::new();
+    let mut struct_fields: Vec<(String, Vec<(String, MirTy)>)> = Vec::new();
     for td in &program.types {
         match td {
             TypeDef::Struct { name, fields } => {
-                let llvm_fields: Vec<BasicTypeEnum> = fields
-                    .iter()
-                    .map(|(_, t)| mir_ty_to_llvm(context, t))
-                    .collect();
-                let st = context.struct_type(
-                    &llvm_fields.iter().map(|t| (*t).into()).collect::<Vec<_>>(),
-                    false,
-                );
-                struct_types.insert(name.clone(), st);
-                field_schemas.insert(name.clone(), schema_for_fields(fields));
+                struct_fields.push((name.clone(), fields.clone()));
                 let _ = module;
             }
             TypeDef::Class {
                 name,
                 fields,
                 virtual_methods,
+                weak_fields: wf,
+                unowned_fields: uf,
                 ..
             } => {
                 let mut llvm_fields: Vec<BasicTypeEnum> = vec![ptr.into()];
-                llvm_fields.extend(fields.iter().map(|(_, t)| mir_ty_to_llvm(context, t)));
+                // Weak/unowned fields are stored as raw pointers (optional class erased).
+                llvm_fields.extend(fields.iter().map(|(fname, t)| {
+                    let _ = fname;
+                    let store_ty = match t {
+                        MirTy::Optional(inner) if matches!(inner.as_ref(), MirTy::Class(_)) => {
+                            &MirTy::Class("_".into())
+                        }
+                        other => other,
+                    };
+                    field_llvm_ty(context, store_ty, &struct_types)
+                }));
                 let st = context.struct_type(
                     &llvm_fields.iter().map(|t| (*t).into()).collect::<Vec<_>>(),
                     false,
                 );
                 struct_types.insert(name.clone(), st);
                 class_with_vtable.insert(name.clone(), virtual_methods.clone());
+                weak_fields.insert(name.clone(), wf.clone());
+                unowned_fields.insert(name.clone(), uf.clone());
             }
             TypeDef::Enum { name, .. } => {
                 struct_types.insert(name.clone(), enum_rep);
             }
         }
     }
+    // Multi-pass so nested `Struct` fields resolve once dependents exist.
+    for _ in 0..struct_fields.len().saturating_add(1) {
+        let mut progressed = false;
+        for (name, fields) in &struct_fields {
+            if struct_types.contains_key(name) {
+                continue;
+            }
+            let ready = fields.iter().all(|(_, t)| match t {
+                MirTy::Struct(n) | MirTy::Class(n) => struct_types.contains_key(n),
+                _ => true,
+            });
+            if !ready {
+                continue;
+            }
+            let llvm_fields: Vec<BasicTypeEnum> = fields
+                .iter()
+                .map(|(_, t)| field_llvm_ty(context, t, &struct_types))
+                .collect();
+            let st = context.struct_type(
+                &llvm_fields.iter().map(|t| (*t).into()).collect::<Vec<_>>(),
+                false,
+            );
+            struct_types.insert(name.clone(), st);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+    for (name, fields) in &struct_fields {
+        if !struct_types.contains_key(name) {
+            let llvm_fields: Vec<BasicTypeEnum> = fields
+                .iter()
+                .map(|(_, t)| field_llvm_ty(context, t, &struct_types))
+                .collect();
+            let st = context.struct_type(
+                &llvm_fields.iter().map(|t| (*t).into()).collect::<Vec<_>>(),
+                false,
+            );
+            struct_types.insert(name.clone(), st);
+        }
+        field_schemas.insert(name.clone(), schema_for_fields(fields, &field_schemas));
+    }
+    // Rebuild schemas once so nested `{...}` can expand.
+    for (name, fields) in &struct_fields {
+        field_schemas.insert(name.clone(), schema_for_fields(fields, &field_schemas));
+    }
     TypeLayout {
         struct_types,
         enum_rep,
         class_with_vtable,
         field_schemas,
+        weak_fields,
+        unowned_fields,
     }
 }
 
-fn schema_for_fields(fields: &[(String, MirTy)]) -> String {
+/// LLVM layout for Codable struct fields (Bool stored as i64 to match JSON `b`/`i`).
+fn field_llvm_ty<'ctx>(
+    context: &'ctx Context,
+    ty: &MirTy,
+    structs: &HashMap<String, StructType<'ctx>>,
+) -> BasicTypeEnum<'ctx> {
+    match ty {
+        MirTy::Bool => context.i64_type().into(),
+        MirTy::Struct(n) | MirTy::Class(n) => structs
+            .get(n)
+            .map(|s| (*s).into())
+            .unwrap_or_else(|| context.struct_type(&[], false).into()),
+        MirTy::Array(_) => context.ptr_type(AddressSpace::default()).into(),
+        other => mir_ty_to_llvm(context, other),
+    }
+}
+
+fn schema_for_fields(fields: &[(String, MirTy)], known: &HashMap<String, String>) -> String {
     fields
         .iter()
         .map(|(n, t)| {
             let kind = match t {
-                MirTy::String => "s",
+                MirTy::String => "s".into(),
+                MirTy::Bool => "b".into(),
                 MirTy::Int | MirTy::Int64 | MirTy::Int32 | MirTy::Int16 | MirTy::Int8 | MirTy::UInt => {
-                    "i"
+                    "i".into()
                 }
-                _ => "s",
+                MirTy::Struct(name) | MirTy::Class(name) => {
+                    let inner = known.get(name).cloned().unwrap_or_default();
+                    format!("{{{inner}}}")
+                }
+                MirTy::Array(inner) => match inner.as_ref() {
+                    MirTy::Int | MirTy::Int64 => "[i]".into(),
+                    MirTy::String => "[s]".into(),
+                    _ => "[i]".into(),
+                },
+                _ => "s".into(),
             };
             format!("{n}:{kind}")
         })
@@ -248,6 +538,33 @@ fn mir_ty_to_llvm<'ctx>(context: &'ctx Context, ty: &MirTy) -> BasicTypeEnum<'ct
         MirTy::Named(n) if n == "__err_out" || n == "void*" => {
             context.ptr_type(AddressSpace::default()).into()
         }
+        MirTy::Named(n)
+            if n.starts_with("existential:")
+                || matches!(
+                    n.as_str(),
+                    "Task"
+                        | "Mutex"
+                        | "Channel"
+                        | "WaitGroup"
+                        | "TaskGroup"
+                        | "CancellationToken"
+                        | "SQLConnection"
+                        | "SQLManager"
+                        | "TcpStream"
+                        | "Dictionary"
+                        | "Set"
+                        | "MainActor"
+                        | "ProcessHandle"
+                ) =>
+        {
+            context.ptr_type(AddressSpace::default()).into()
+        }
+        MirTy::Named(n) if n == "Decimal" || n == "UInt64" => context.i64_type().into(),
+        MirTy::Named(n) if matches!(n.as_str(), "UInt8") => context.i8_type().into(),
+        MirTy::Named(n) if matches!(n.as_str(), "UInt16") => context.i16_type().into(),
+        MirTy::Named(n) if matches!(n.as_str(), "UInt32") => context.i32_type().into(),
+        MirTy::Named(n) if n == "Float32" => context.f32_type().into(),
+        MirTy::Named(n) if n == "Float64" => context.f64_type().into(),
         MirTy::Named(_) | MirTy::Error => context.i64_type().into(),
     }
 }
@@ -320,6 +637,10 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                 val = as_i1.into();
             }
         }
+        // Numeric / representation casts when Store target MIR type differs (from Cast lowering).
+        if let Some(dst_ty) = self.local_types.get(&loc.0).cloned() {
+            val = self.coerce_basic_to_mir(val, &dst_ty)?;
+        }
         if let Some(ptr) = self.allocas.get(&loc.0).copied() {
             if !self.is_address_local(loc) {
                 self.builder
@@ -329,6 +650,70 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         }
         self.values.insert(loc.0, val);
         Ok(())
+    }
+
+    fn coerce_basic_to_mir(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        dst: &MirTy,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        match dst {
+            MirTy::Double | MirTy::Float => {
+                let fty = if matches!(dst, MirTy::Float) {
+                    self.context.f32_type()
+                } else {
+                    self.context.f64_type()
+                };
+                if val.is_int_value() {
+                    let iv = val.into_int_value();
+                    let fv = self
+                        .builder
+                        .build_signed_int_to_float(iv, fty, "sitofp")?;
+                    return Ok(fv.into());
+                }
+                if val.is_float_value() {
+                    let fv = val.into_float_value();
+                    if fv.get_type() != fty {
+                        let cast = if matches!(dst, MirTy::Float) {
+                            self.builder.build_float_trunc(fv, fty, "fptrunc")?
+                        } else {
+                            self.builder.build_float_ext(fv, fty, "fpext")?
+                        };
+                        return Ok(cast.into());
+                    }
+                }
+            }
+            MirTy::Int | MirTy::Int64 | MirTy::Int32 | MirTy::Int16 | MirTy::Int8 | MirTy::UInt => {
+                let ity = match dst {
+                    MirTy::Int8 => self.context.i8_type(),
+                    MirTy::Int16 => self.context.i16_type(),
+                    MirTy::Int32 => self.context.i32_type(),
+                    _ => self.i64_type(),
+                };
+                let bits = ity.get_bit_width();
+                if val.is_float_value() {
+                    let fv = val.into_float_value();
+                    let iv = self
+                        .builder
+                        .build_float_to_signed_int(fv, ity, "fptosi")?;
+                    return Ok(iv.into());
+                }
+                if val.is_int_value() {
+                    let iv = val.into_int_value();
+                    let cur = iv.get_type().get_bit_width();
+                    if cur != bits {
+                        let cast = if cur > bits {
+                            self.builder.build_int_truncate(iv, ity, "trunc")?
+                        } else {
+                            self.builder.build_int_s_extend(iv, ity, "sext")?
+                        };
+                        return Ok(cast.into());
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(val)
     }
 
     fn get_value(&self, val: &Value) -> Result<BasicValueEnum<'ctx>> {
@@ -373,6 +758,101 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         self.module
             .get_function(name)
             .unwrap_or_else(|| panic!("missing extern `{name}`"))
+    }
+
+    /// Spawn zero-arg `func_name` via `ll_task_spawn` / `ll_task_spawn_ret`.
+    fn emit_task_spawn(
+        &self,
+        func_name: &str,
+        returns_value: bool,
+        ret_ty: &MirTy,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let target = self.module.get_function(func_name).ok_or_else(|| {
+            anyhow::anyhow!("task spawn target function `{func_name}` not found in module")
+        })?;
+        let spawn_name = if returns_value {
+            "ll_task_spawn_ret"
+        } else {
+            "ll_task_spawn"
+        };
+        let spawn = self.extern_fn(spawn_name);
+        let fn_ptr: PointerValue = target.as_global_value().as_pointer_value();
+        let call = self
+            .builder
+            .build_call(spawn, &[fn_ptr.into()], "task_spawn")
+            .with_context(|| spawn_name.to_string())?;
+        if matches!(ret_ty, MirTy::Void) {
+            return Ok(None);
+        }
+        Ok(call.try_as_basic_value().basic())
+    }
+
+    /// `TaskGroup.add` — spawn `func_name` into the group handle in `args[0]`.
+    fn emit_task_group_add(
+        &self,
+        func_name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let target = self.module.get_function(func_name).ok_or_else(|| {
+            anyhow::anyhow!("task group add target `{func_name}` not found in module")
+        })?;
+        let group = args.first().copied().ok_or_else(|| {
+            anyhow::anyhow!("ll_task_group_add missing group argument")
+        })?;
+        let add = self.extern_fn("ll_task_group_add");
+        let fn_ptr: PointerValue = target.as_global_value().as_pointer_value();
+        self.builder
+            .build_call(add, &[group, fn_ptr.into()], "task_group_add")
+            .with_context(|| "ll_task_group_add".to_string())?;
+        Ok(None)
+    }
+
+    /// `HttpServer.serve(port, handler)` — pass `(String)->String` fn pointer to runtime.
+    fn emit_http_serve(
+        &self,
+        handler: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let target = self.module.get_function(handler).ok_or_else(|| {
+            anyhow::anyhow!("HttpServer.serve handler `{handler}` not found in module")
+        })?;
+        let port = args.first().copied().ok_or_else(|| {
+            anyhow::anyhow!("ll_http_server_serve missing port argument")
+        })?;
+        let serve = self.extern_fn("ll_http_server_serve");
+        let fn_ptr: PointerValue = target.as_global_value().as_pointer_value();
+        self.builder
+            .build_call(serve, &[port, fn_ptr.into()], "http_serve")
+            .with_context(|| "ll_http_server_serve".to_string())?;
+        Ok(None)
+    }
+
+    /// Declare an external function matching call-site arg/return types (prebuilt `.bll` symbols).
+    fn declare_prebuilt_extern(
+        &self,
+        name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        ret_ty: &MirTy,
+    ) -> Result<FunctionValue<'ctx>> {
+        if let Some(f) = self.module.get_function(name) {
+            return Ok(f);
+        }
+        let param_tys: Vec<BasicMetadataTypeEnum> = args
+            .iter()
+            .map(|a| {
+                BasicValueEnum::try_from(*a)
+                    .map(|v| v.get_type().into())
+                    .unwrap_or_else(|_| self.ptr_type().into())
+            })
+            .collect();
+        let fn_ty = if *ret_ty == MirTy::Void {
+            self.context.void_type().fn_type(&param_tys, false)
+        } else {
+            llvm_ty_with_layout(self.context, &self.layout, ret_ty).fn_type(&param_tys, false)
+        };
+        Ok(self
+            .module
+            .add_function(name, fn_ty, Some(Linkage::External)))
     }
 
     /// Box an error value for `__err_out`: retain pointer-like values, otherwise `ll_box_bytes`.
@@ -494,13 +974,29 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                                     .basic()
                                     .unwrap()
                             } else if bv.is_int_value() {
-                                let f = self.extern_fn("ll_string_from_i64");
-                                self.builder
-                                    .build_call(f, &[bv.into()], "isi")
-                                    .with_context(|| "interp int")?
-                                    .try_as_basic_value()
-                                    .basic()
-                                    .unwrap()
+                                let iv = bv.into_int_value();
+                                if iv.get_type().get_bit_width() == 1 {
+                                    let as_i32 = self.builder.build_int_z_extend(
+                                        iv,
+                                        self.context.i32_type(),
+                                        "b2i",
+                                    )?;
+                                    let f = self.extern_fn("ll_string_from_bool");
+                                    self.builder
+                                        .build_call(f, &[as_i32.into()], "isb")
+                                        .with_context(|| "interp bool")?
+                                        .try_as_basic_value()
+                                        .basic()
+                                        .unwrap()
+                                } else {
+                                    let f = self.extern_fn("ll_string_from_i64");
+                                    self.builder
+                                        .build_call(f, &[iv.into()], "isi")
+                                        .with_context(|| "interp int")?
+                                        .try_as_basic_value()
+                                        .basic()
+                                        .unwrap()
+                                }
                             } else if bv.is_pointer_value() {
                                 self.builder.build_call(
                                     self.extern_fn("ll_retain"),
@@ -549,9 +1045,30 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                         }
                     }
                 }
+                let mut_array = matches!(
+                    callee,
+                    Callee::Builtin(n) if matches!(
+                        n.as_str(),
+                        "ll_array_append_i64"
+                            | "ll_array_set_i64"
+                            | "ll_array_append"
+                            | "ll_array_append_ptr"
+                    )
+                );
                 let llvm_args: Vec<BasicMetadataValueEnum> = args
                     .iter()
-                    .map(|a| self.get_value(a).map(|v| v.into()))
+                    .enumerate()
+                    .map(|(i, a)| {
+                        if mut_array && i == 0 {
+                            // Mutating array helpers take `void **` (handle slot address).
+                            if let Value::Local(loc) = a {
+                                if let Some(slot) = self.allocas.get(&loc.0).copied() {
+                                    return Ok(slot.into());
+                                }
+                            }
+                        }
+                        self.get_value(a).map(|v| v.into())
+                    })
                     .collect::<Result<_>>()?;
                 let arg0_ty = args.first().and_then(|a| match a {
                     Value::Local(l) => self.local_types.get(&l.0).cloned(),
@@ -783,13 +1300,37 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         if let Callee::Virtual { class, method, slot } = callee {
             return self.emit_virtual_call(class, method, *slot, args, ret_ty);
         }
+        if let Callee::TaskSpawn {
+            name: func_name,
+            returns_value,
+        } = callee
+        {
+            return self.emit_task_spawn(func_name, *returns_value, ret_ty);
+        }
+        if let Callee::TaskGroupAdd { name: func_name } = callee {
+            return self.emit_task_group_add(func_name, args);
+        }
+        if let Callee::HttpServe { handler } = callee {
+            return self.emit_http_serve(handler, args);
+        }
         let name = match callee {
             Callee::Func(n) => n.as_str(),
             Callee::Builtin(n) => n.as_str(),
-            Callee::Virtual { .. } => unreachable!(),
+            Callee::Virtual { .. }
+            | Callee::TaskSpawn { .. }
+            | Callee::TaskGroupAdd { .. }
+            | Callee::HttpServe { .. } => {
+                unreachable!()
+            }
         };
-        if name == "ll_int_from_string" {
-            return self.emit_int_from_string(args, ret_ty);
+        if name == "ll_int_from_string"
+            || name == "ll_env_get_i64"
+            || name == "ll_env_get_bool"
+            || name == "ll_env_get_f64"
+            || name == "ll_env_get_decimal"
+            || name == "ll_decimal_from_string"
+        {
+            return self.emit_scalar_with_ok(name, args, ret_ty);
         }
         if name == "ll_json_decode" || name == "ll_toon_decode" {
             return self.emit_codec_decode(name, args, ret_ty);
@@ -797,8 +1338,14 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         if name == "ll_json_encode" || name == "ll_toon_encode" {
             return self.emit_codec_encode(name, args, arg0_ty);
         }
-        if name == "ll_http_get" {
-            return self.emit_http_get(args, ret_ty);
+        if name == "ll_http_get" || name == "ll_http_post" {
+            return self.emit_http_call(name, args, ret_ty);
+        }
+        if matches!(
+            name,
+            "ll_env_get" | "ll_args_get" | "ll_read_line" | "ll_dict_get"
+        ) {
+            return self.emit_nullable_string(name, args, ret_ty);
         }
         if name == "ll_optional_is_some" {
             // Optional LLVM layout: { i1 present, T value }
@@ -812,25 +1359,67 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                 .with_context(|| "extract optional present")?;
             return Ok(Some(present));
         }
-        let f = if matches!(callee, Callee::Func(_)) {
-            self.module
-                .get_function(name)
-                .ok_or_else(|| anyhow::anyhow!("undefined function `{name}`"))?
+        let f = if let Some(f) = self.module.get_function(name) {
+            f
+        } else if matches!(callee, Callee::Func(_)) {
+            // Prefer a function defined in this module; otherwise declare an extern for `.bll` link.
+            self.declare_prebuilt_extern(name, args, ret_ty)?
+        } else if matches!(callee, Callee::Builtin(_)) {
+            // `@extern(cName:)` and other late C symbols — declare from call shape.
+            self.declare_prebuilt_extern(name, args, ret_ty)?
         } else {
             self.extern_fn(name)
         };
+        // Coerce Bool (i1) args to i32 for C helpers like `ll_assert`.
+        let coerced: Vec<BasicMetadataValueEnum> = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let v = BasicValueEnum::try_from(*a);
+                if let Ok(BasicValueEnum::IntValue(iv)) = v {
+                    if iv.get_type().get_bit_width() == 1 {
+                        let param_tys = f.get_type().get_param_types();
+                        if let Some(BasicMetadataTypeEnum::IntType(it)) = param_tys.get(i).copied() {
+                            if it.get_bit_width() == 32 {
+                                return self
+                                    .builder
+                                    .build_int_z_extend(iv, it, "zext_i1")
+                                    .map(|x| x.into())
+                                    .unwrap_or(*a);
+                            }
+                        }
+                    }
+                }
+                *a
+            })
+            .collect();
         let call = self
             .builder
-            .build_call(f, args, "call")
+            .build_call(f, &coerced, "call")
             .with_context(|| format!("call {name}"))?;
         if *ret_ty == MirTy::Void {
             Ok(None)
         } else {
-            Ok(Some(
-                call.try_as_basic_value()
-                    .basic()
-                    .ok_or_else(|| anyhow::anyhow!("void call used with non-void ty"))?,
-            ))
+            let mut result = call
+                .try_as_basic_value()
+                .basic()
+                .ok_or_else(|| anyhow::anyhow!("void call used with non-void ty"))?;
+            // C `int` → MIR Bool
+            if matches!(ret_ty, MirTy::Bool) && result.is_int_value() {
+                let iv = result.into_int_value();
+                if iv.get_type().get_bit_width() > 1 {
+                    result = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            iv,
+                            iv.get_type().const_int(0, false),
+                            "boolish",
+                        )?
+                        .into();
+                }
+            }
+            Ok(Some(result))
         }
     }
 
@@ -873,8 +1462,18 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                     .builder
                     .build_load(self.ptr_type(), slot_ptr, "vfn")?
                     .into_pointer_value();
-                // Use the static function's type for the indirect call.
-                if let Some(static_f) = self.module.get_function(&mangled) {
+                // Use a concrete method's type for the indirect call (protocol existentials
+                // may not define `Proto_method` — any `*_method` implementor works).
+                let static_f = self.module.get_function(&mangled).or_else(|| {
+                    let suffix = format!("_{method}");
+                    self.module.get_functions().find(|f| {
+                        f.get_name()
+                            .to_str()
+                            .map(|n| n.ends_with(&suffix))
+                            .unwrap_or(false)
+                    })
+                });
+                if let Some(static_f) = static_f {
                     let fn_ty = static_f.get_type();
                     let call = self.builder.build_indirect_call(
                         fn_ty,
@@ -897,6 +1496,15 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         let f = self
             .module
             .get_function(&mangled)
+            .or_else(|| {
+                let suffix = format!("_{method}");
+                self.module.get_functions().find(|f| {
+                    f.get_name()
+                        .to_str()
+                        .map(|n| n.ends_with(&suffix))
+                        .unwrap_or(false)
+                })
+            })
             .ok_or_else(|| anyhow::anyhow!("undefined virtual `{mangled}`"))?;
         let call = self.builder.build_call(f, args, "vcall_static")?;
         if *ret_ty == MirTy::Void {
@@ -1006,8 +1614,9 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         Ok(Some(s))
     }
 
-    fn emit_http_get(
+    fn emit_http_call(
         &mut self,
+        name: &str,
         args: &[BasicMetadataValueEnum<'ctx>],
         ret_ty: &MirTy,
     ) -> Result<Option<BasicValueEnum<'ctx>>> {
@@ -1018,7 +1627,7 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         call_args.push(ok_alloca.into());
         let s = self
             .builder
-            .build_call(self.extern_fn("ll_http_get"), &call_args, "http")?
+            .build_call(self.extern_fn(name), &call_args, "http")?
             .try_as_basic_value()
             .basic()
             .unwrap();
@@ -1047,8 +1656,52 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         Ok(Some(s))
     }
 
-    fn emit_int_from_string(
+    fn emit_nullable_string(
         &mut self,
+        name: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        ret_ty: &MirTy,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let f = self.extern_fn(name);
+        let ptr_val = self
+            .builder
+            .build_call(f, args, "nullable")?
+            .try_as_basic_value()
+            .basic()
+            .unwrap();
+        if !matches!(ret_ty, MirTy::Optional(_)) {
+            return Ok(Some(ptr_val));
+        }
+        let p = ptr_val.into_pointer_value();
+        let present = self.builder.build_int_compare(
+            IntPredicate::NE,
+            self.builder
+                .build_ptr_to_int(p, self.i64_type(), "np")?,
+            self.i64_type().const_int(0, false),
+            "np_nz",
+        )?;
+        let opt_ty = optional_llvm_type(self.context, &MirTy::String);
+        let undef = opt_ty.get_undef();
+        let with_p = self
+            .builder
+            .build_insert_value(undef, present, 0, "nsp")?
+            .into_struct_value();
+        let empty = self.ptr_type().const_null();
+        let with_v = self
+            .builder
+            .build_insert_value(with_p, empty, 1, "nsv_pre")?
+            .into_struct_value();
+        // Use the pointer when present; null otherwise (Optional String payload).
+        let with_v = self
+            .builder
+            .build_insert_value(with_v, ptr_val, 1, "nsv")?
+            .into_struct_value();
+        Ok(Some(with_v.into()))
+    }
+
+    fn emit_scalar_with_ok(
+        &mut self,
+        name: &str,
         args: &[BasicMetadataValueEnum<'ctx>],
         ret_ty: &MirTy,
     ) -> Result<Option<BasicValueEnum<'ctx>>> {
@@ -1061,14 +1714,33 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
             .with_context(|| "init ok_out")?;
         let mut call_args = args.to_vec();
         call_args.push(ok_alloca.into());
-        let f = self.extern_fn("ll_int_from_string");
-        let v = self
+        let f = self.extern_fn(name);
+        let mut v = self
             .builder
             .build_call(f, &call_args, "parsed")
-            .with_context(|| "ll_int_from_string")?
+            .with_context(|| format!("call {name}"))?
             .try_as_basic_value()
             .basic()
             .unwrap();
+        // C `int` bool helpers → i1 when returning Bool / Bool?.
+        let inner_for_bool = match ret_ty {
+            MirTy::Optional(inner) => inner.as_ref(),
+            other => other,
+        };
+        if matches!(inner_for_bool, MirTy::Bool) && v.is_int_value() {
+            let iv = v.into_int_value();
+            if iv.get_type().get_bit_width() > 1 {
+                v = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        iv,
+                        iv.get_type().const_int(0, false),
+                        "boolish",
+                    )?
+                    .into();
+            }
+        }
         if matches!(ret_ty, MirTy::Optional(_)) {
             let ok_loaded = self
                 .builder
@@ -1226,6 +1898,34 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                 self.builder.build_not(all_eq, "neq")?.into()
             } else {
                 all_eq.into()
+            });
+        }
+        // String / pointer equality via runtime.
+        if left.is_pointer_value()
+            && right.is_pointer_value()
+            && matches!(op, BinOp::Eq | BinOp::NotEq)
+        {
+            let eq_i32 = self
+                .builder
+                .build_call(
+                    self.extern_fn("ll_string_eq"),
+                    &[left.into(), right.into()],
+                    "streq",
+                )?
+                .try_as_basic_value()
+                .basic()
+                .unwrap()
+                .into_int_value();
+            let eq = self.builder.build_int_compare(
+                IntPredicate::NE,
+                eq_i32,
+                self.context.i32_type().const_int(0, false),
+                "streqz",
+            )?;
+            return Ok(if matches!(op, BinOp::NotEq) {
+                self.builder.build_not(eq, "strne")?.into()
+            } else {
+                eq.into()
             });
         }
         let l = left.into_int_value();
@@ -1438,7 +2138,23 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         index: usize,
         ty: &MirTy,
     ) -> Result<BasicValueEnum<'ctx>> {
-        let llvm_ty = mir_ty_to_llvm(self.context, ty);
+        let class_name = match base_ty {
+            Some(MirTy::Class(n)) => Some(n.as_str()),
+            _ => None,
+        };
+        let is_weak = class_name
+            .and_then(|n| self.layout.weak_fields.get(n))
+            .map(|w| w.contains(&index))
+            .unwrap_or(false);
+        let is_unowned = class_name
+            .and_then(|n| self.layout.unowned_fields.get(n))
+            .map(|w| w.contains(&index))
+            .unwrap_or(false);
+        let llvm_ty = if is_weak || is_unowned {
+            self.ptr_type().into()
+        } else {
+            mir_ty_to_llvm(self.context, ty)
+        };
         let class_offset = matches!(base_ty, Some(MirTy::Class(_))) as usize;
         let llvm_index = (index + class_offset) as u32;
         if base.is_pointer_value() {
@@ -1452,6 +2168,42 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                     .builder
                     .build_struct_gep(st, ptr, llvm_index, "fld_ptr")
                     .with_context(|| "class field gep")?;
+                if is_weak {
+                    let load_fn = self.extern_fn("ll_weak_load");
+                    let loaded = self
+                        .builder
+                        .build_call(load_fn, &[field_ptr.into()], "weak_ld")?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| anyhow::anyhow!("ll_weak_load"))?;
+                    // Wrap as Optional when the MIR type is Optional.
+                    if let MirTy::Optional(inner) = ty {
+                        let opt_ty = optional_llvm_type(self.context, inner);
+                        let undef = opt_ty.get_undef();
+                        let is_null = self.builder.build_is_null(loaded.into_pointer_value(), "wnull")?;
+                        let present = self.builder.build_not(is_null, "wpresent")?;
+                        let agg = self
+                            .builder
+                            .build_insert_value(undef, present, 0, "wopt_p")
+                            .with_context(|| "weak opt present")?;
+                        let agg = self
+                            .builder
+                            .build_insert_value(agg, loaded, 1, "wopt_v")
+                            .with_context(|| "weak opt val")?;
+                        return Ok(agg.into_struct_value().into());
+                    }
+                    return Ok(loaded);
+                }
+                if is_unowned {
+                    let load_fn = self.extern_fn("ll_unowned_load");
+                    let loaded = self
+                        .builder
+                        .build_call(load_fn, &[field_ptr.into()], "unowned_ld")?
+                        .try_as_basic_value()
+                        .basic()
+                        .ok_or_else(|| anyhow::anyhow!("ll_unowned_load"))?;
+                    return Ok(loaded);
+                }
                 let loaded = self
                     .builder
                     .build_load(llvm_ty, field_ptr, "fld")
@@ -1474,6 +2226,18 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
         index: usize,
         val: BasicValueEnum<'ctx>,
     ) -> Result<()> {
+        let class_name = match base_ty {
+            Some(MirTy::Class(n)) => Some(n.as_str()),
+            _ => None,
+        };
+        let is_weak = class_name
+            .and_then(|n| self.layout.weak_fields.get(n))
+            .map(|w| w.contains(&index))
+            .unwrap_or(false);
+        let is_unowned = class_name
+            .and_then(|n| self.layout.unowned_fields.get(n))
+            .map(|w| w.contains(&index))
+            .unwrap_or(false);
         let class_offset = matches!(base_ty, Some(MirTy::Class(_))) as usize;
         let llvm_index = (index + class_offset) as u32;
         if base.is_pointer_value() {
@@ -1487,6 +2251,42 @@ impl<'a, 'ctx> Cg<'a, 'ctx> {
                     .builder
                     .build_struct_gep(st, ptr, llvm_index, "sfld")
                     .with_context(|| "class set gep")?;
+                if is_weak {
+                    // Unwrap Optional → payload pointer (or null).
+                    let obj = if val.is_struct_value() {
+                        let sv = val.into_struct_value();
+                        let present = self.builder.build_extract_value(sv, 0, "wp")?.into_int_value();
+                        let payload = self.builder.build_extract_value(sv, 1, "wv")?;
+                        let null = self.ptr_type().const_null();
+                        self.builder
+                            .build_select(present, payload, null.into(), "wsel")?
+                    } else {
+                        val
+                    };
+                    let store_fn = self.extern_fn("ll_weak_store");
+                    self.builder.build_call(
+                        store_fn,
+                        &[field_ptr.into(), obj.into()],
+                        "weak_st",
+                    )?;
+                    return Ok(());
+                }
+                if is_unowned {
+                    let store_fn = self.extern_fn("ll_unowned_store");
+                    self.builder.build_call(
+                        store_fn,
+                        &[field_ptr.into(), val.into()],
+                        "unowned_st",
+                    )?;
+                    // Also register in weak side table so unowned_load can detect free.
+                    let weak_fn = self.extern_fn("ll_weak_store");
+                    self.builder.build_call(
+                        weak_fn,
+                        &[field_ptr.into(), val.into()],
+                        "unowned_reg",
+                    )?;
+                    return Ok(());
+                }
                 self.builder
                     .build_store(field_ptr, val)
                     .with_context(|| "class set field")?;

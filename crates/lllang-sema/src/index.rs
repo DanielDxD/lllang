@@ -24,6 +24,8 @@ pub struct SymbolDef {
     pub def_span: Span,
     pub ty: Option<String>,
     pub kind: SymbolKind,
+    /// `#deprecated` message when the symbol is marked deprecated.
+    pub deprecated: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,8 +72,39 @@ impl SymbolIndex {
             def_span,
             ty: ty.map(|t| t.display()),
             kind,
+            deprecated: None,
         });
         id
+    }
+
+    /// Update type / deprecation on an existing global function (by short name).
+    pub fn annotate_global(
+        &mut self,
+        name: &str,
+        ty: Option<&Ty>,
+        deprecated: Option<&str>,
+    ) {
+        if let Some(id) = self.by_name.get(&(String::new(), name.to_string())).copied() {
+            if let Some(def) = self.defs.get_mut(id.0) {
+                if let Some(t) = ty {
+                    def.ty = Some(t.display());
+                }
+                if let Some(msg) = deprecated {
+                    def.deprecated = Some(msg.to_string());
+                }
+            }
+        }
+        // Also annotate file-local defs with the same short name.
+        for def in &mut self.defs {
+            if def.name == name && def.kind == SymbolKind::Function {
+                if let Some(t) = ty {
+                    def.ty = Some(t.display());
+                }
+                if let Some(msg) = deprecated {
+                    def.deprecated = Some(msg.to_string());
+                }
+            }
+        }
     }
 
     pub fn define_global(

@@ -6,13 +6,19 @@ A **package** is the unit of compilation, versioning, and dependency (`Package.l
 
 ## Packages
 
-Each project has a manifest:
+Each project has a **`Package.ll`** manifest (SwiftPM-style DSL), not TOML:
 
-```toml
-[package]
-name = "shop.checkout"
-version = "1.0.0"
+```ll
+Package(
+    name: "shop.checkout",
+    version: "1.0.0",
+    targets: [
+        .executable(name: "Checkout", path: "Sources/Checkout"),
+    ]
+)
 ```
+
+Monorepos may use a root **`Solution.ll`** with path dependencies between packages. Lockfile: **`Package.lock`**.
 
 Built artifacts:
 
@@ -44,7 +50,7 @@ namespace Shop {
 // Full name: Shop.Checkout.Cart
 ```
 
-Files in the same package may use different namespace blocks; default is root namespace from manifest `[package].namespace`.
+Files in the same package may use different namespace blocks; the default namespace comes from the package / target layout in `Package.ll`.
 
 ## Visibility across namespaces
 
