@@ -460,6 +460,18 @@ fn expand_stmt(stmt: Stmt, env: &CompileEnv, diags: &mut Vec<Diagnostic>) -> Vec
             span,
             expr: expand_expr(expr, env, diags),
         }],
+        Stmt::AttrMacro { span, attr } => vec![Stmt::AttrMacro {
+            span,
+            attr: Attribute {
+                span: attr.span,
+                name: attr.name,
+                args: attr
+                    .args
+                    .into_iter()
+                    .map(|e| expand_expr(e, env, diags))
+                    .collect(),
+            },
+        }],
         other => vec![other],
     }
 }

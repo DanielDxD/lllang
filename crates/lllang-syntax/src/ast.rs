@@ -794,6 +794,12 @@ pub enum Stmt {
         span: Span,
         expr: Expr,
     },
+    /// Bare statement macro such as `@expect(...)`, `@equal(a, b)` (Std.Testing).
+    /// `lang test` desugars these before codegen; the parser keeps them for `fmt` / `check`.
+    AttrMacro {
+        span: Span,
+        attr: Attribute,
+    },
     Block(Block),
     Error {
         span: Span,

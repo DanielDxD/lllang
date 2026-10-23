@@ -2553,6 +2553,13 @@ impl Checker {
                     }
                 }
             }
+            AStmt::AttrMacro { attr, .. } => {
+                // Typecheck arguments; emission is handled by `lang test` desugar.
+                for arg in &attr.args {
+                    let _ = self.check_expr(arg, scope, self_ty.clone(), throws.clone(), false);
+                }
+                vec![]
+            }
         }
     }
 

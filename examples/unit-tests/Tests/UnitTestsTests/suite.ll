@@ -11,7 +11,6 @@ public struct UnitTestParallel {
         @expect(result < 0)
         @lt(result, 0)
     }
-
     @theory("should sum two numbers")
     @values(10, 4)
     @values(5, 2)
@@ -19,7 +18,6 @@ public struct UnitTestParallel {
         @equal(add(a, b), a + b)
         @gte(add(a, b), a)
     }
-
     @test("string emptiness")
     public func testEmpty() {
         @empty("")
@@ -28,25 +26,21 @@ public struct UnitTestParallel {
     }
 }
 
-@suite("Sequential", parallel = false)
+@suite("Sequential", false)
 public struct UnitTestSequential {
     @fixture
     public func prepare() {
-        // Suite-level fixture runs before each @test in this suite.
         @expect(true)
     }
-
     @test("negate")
     public func testNegate() {
         @equal(negate(3), 0 - 3)
         @lte(negate(3), 0)
     }
-
     @test
     public func testApprox() {
         @approx(1.0, 1.0)
     }
-
     @throws
     @test("must throw")
     public func testThrows() throws(Boom) {

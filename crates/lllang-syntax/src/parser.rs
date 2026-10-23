@@ -912,10 +912,12 @@ impl Parser {
         if self.check_kind(&TokenKind::Hash) {
             return self.parse_hash_directive(start);
         }
-        // `@run expr` fire-and-forget (Phase 10).
+        // `@run expr` fire-and-forget (Phase 10), or bare assertion macros (`@expect`, …).
+        // Parse **one** `@attr` here — `parse_attributes()` would greedily consume consecutive
+        // assertion macros on following lines (`@expect` + `@lt`) as a single attr list.
         if self.check_kind(&TokenKind::At) {
-            let attrs = self.parse_attributes();
-            if attrs.iter().any(|a| a.name == "run") {
+            let attr = self.parse_one_attribute();
+            if attr.name == "run" {
                 let expr = self.parse_expr();
                 self.eat_kind(&TokenKind::Semicolon);
                 return Some(Stmt::Run {
@@ -923,7 +925,13 @@ impl Parser {
                     expr,
                 });
             }
-            // Unknown @attr at statement position — fall through as error recovery.
+            if is_testing_assert_macro(&attr.name) {
+                self.eat_kind(&TokenKind::Semicolon);
+                return Some(Stmt::AttrMacro {
+                    span: span_from(start, self.prev_span()),
+                    attr,
+                });
+            }
             self.error_expected("statement after attribute", self.current_span());
             return None;
         }
@@ -1348,25 +1356,15 @@ impl Parser {
 
     fn parse_param(&mut self) -> Param {
         let start = self.current_span().start;
-        let external = if self.check_ident_start() && self.current_text() == "_" {
-            self.bump();
-            Some("_".to_string())
-        } else if self.check_ident_start() {
-            let id = self.parse_ident();
-            if self.check_kind(&TokenKind::Colon) {
-                Some(id)
+        // LLLang has no Swift external argument labels: params are `name: Type`.
+        // A lone `_` is allowed for an unused parameter (`_: Type`).
+        let (external_name, internal_name) =
+            if self.check_ident_start() && self.current_text() == "_" {
+                self.bump();
+                (None, "_".to_string())
             } else {
-                self.pos -= 1;
-                None
-            }
-        } else {
-            None
-        };
-        let internal = if self.check_ident_start() {
-            self.parse_ident()
-        } else {
-            external.clone().unwrap_or_else(|| "_".to_string())
-        };
+                (None, self.parse_ident())
+            };
         self.expect_kind(&TokenKind::Colon);
         let ty = self.parse_type();
         let default = if self.eat_kind(&TokenKind::Assign) {
@@ -1376,8 +1374,8 @@ impl Parser {
         };
         Param {
             span: span_from(start, self.prev_span()),
-            external_name: external,
-            internal_name: internal,
+            external_name,
+            internal_name,
             ty,
             default,
         }
@@ -1510,40 +1508,44 @@ impl Parser {
         attrs
     }
 
+    fn parse_one_attribute(&mut self) -> Attribute {
+        let start = self.current_span().start;
+        self.expect_kind(&TokenKind::At);
+        // Soft-keywords allowed as attribute names (`@throws`).
+        let name = if self.eat_kind(&TokenKind::Throws) {
+            "throws".into()
+        } else {
+            self.parse_ident()
+        };
+        let mut args = Vec::new();
+        if self.eat_kind(&TokenKind::LParen) {
+            while !self.check_kind(&TokenKind::RParen) {
+                // Allow labeled attribute args: `parallel: false` or `parallel = false`.
+                if self.check_ident_start()
+                    && (self.peek_kind_is(1, &TokenKind::Colon)
+                        || self.peek_kind_is(1, &TokenKind::Assign))
+                {
+                    let _label = self.parse_ident();
+                    self.bump(); // Colon or Assign
+                }
+                args.push(self.parse_expr());
+                if !self.eat_kind(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.eat_kind(&TokenKind::RParen);
+        }
+        Attribute {
+            span: span_from(start, self.prev_span()),
+            name,
+            args,
+        }
+    }
+
     fn parse_attributes(&mut self) -> Vec<Attribute> {
         let mut attrs = Vec::new();
         while self.check_kind(&TokenKind::At) {
-            let start = self.current_span().start;
-            self.bump();
-            // Soft-keywords allowed as attribute names (`@throws`).
-            let name = if self.eat_kind(&TokenKind::Throws) {
-                "throws".into()
-            } else {
-                self.parse_ident()
-            };
-            let mut args = Vec::new();
-            if self.eat_kind(&TokenKind::LParen) {
-                while !self.check_kind(&TokenKind::RParen) {
-                    // Allow labeled attribute args: `parallel: false` or `parallel = false`.
-                    if self.check_ident_start()
-                        && (self.peek_kind_is(1, &TokenKind::Colon)
-                            || self.peek_kind_is(1, &TokenKind::Assign))
-                    {
-                        let _label = self.parse_ident();
-                        self.bump(); // Colon or Assign
-                    }
-                    args.push(self.parse_expr());
-                    if !self.eat_kind(&TokenKind::Comma) {
-                        break;
-                    }
-                }
-                self.eat_kind(&TokenKind::RParen);
-            }
-            attrs.push(Attribute {
-                span: span_from(start, self.prev_span()),
-                name,
-                args,
-            });
+            attrs.push(self.parse_one_attribute());
         }
         attrs
     }
@@ -2943,6 +2945,27 @@ impl SpanExt for IfArm {
     fn span(&self) -> Span {
         self.span
     }
+}
+
+/// Std.Testing assertion macros used as bare statements (`@expect(...)`, …).
+fn is_testing_assert_macro(name: &str) -> bool {
+    matches!(
+        name,
+        "expect"
+            | "true"
+            | "false"
+            | "equal"
+            | "notequal"
+            | "empty"
+            | "notEmpty"
+            | "noempty"
+            | "gt"
+            | "gte"
+            | "lt"
+            | "lte"
+            | "contains"
+            | "approx"
+    )
 }
 
 fn span_from(start: u32, end: Span) -> Span {

@@ -386,8 +386,8 @@ impl Printer {
         self.raw("{");
         self.newline();
         self.indent += 1;
-        for case in &e.cases {
-            self.raw("case ");
+        // LLLang enum cases are bare identifiers (no Swift `case` keyword).
+        for (ci, case) in e.cases.iter().enumerate() {
             self.raw(&case.name);
             if !case.payload.is_empty() {
                 self.raw("(");
@@ -404,6 +404,9 @@ impl Printer {
             if let Some(v) = &case.raw_value {
                 self.raw(" = ");
                 self.expr(v);
+            }
+            if ci + 1 < e.cases.len() || !e.members.is_empty() {
+                self.raw(",");
             }
             self.newline();
         }
@@ -706,9 +709,13 @@ impl Printer {
             if i > 0 {
                 self.raw(", ");
             }
+            // Only emit an external label when it differs from the internal name
+            // (LLLang does not use Swift-style labels; keep `_` omit markers printable).
             if let Some(ext) = &p.external_name {
-                self.raw(ext);
-                self.space();
+                if ext != &p.internal_name {
+                    self.raw(ext);
+                    self.space();
+                }
             }
             self.raw(&p.internal_name);
             self.raw(": ");
@@ -940,6 +947,7 @@ impl Printer {
                 self.raw("@run ");
                 self.expr(expr);
             }
+            Stmt::AttrMacro { attr, .. } => self.attr(attr),
             Stmt::Block(b) => self.block(b),
             Stmt::Error { .. } => self.raw("<error>"),
         }
